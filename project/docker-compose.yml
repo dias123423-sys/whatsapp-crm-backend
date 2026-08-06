@@ -31,8 +31,9 @@ services:
       AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
 
       # Database — Neon PostgreSQL, отдельная schema evolution_api
+      # IMPORTANT: use direct (non-pooler) URL for migrations (DDL support)
       DATABASE_PROVIDER:             postgresql
-      DATABASE_CONNECTION_URI:       "postgresql://neondb_owner:npg_MmQw8rHFN9OU@ep-withered-pond-aythlva6-pooler.c-5.us-east-2.aws.neon.tech/neondb?schema=evolution_api&sslmode=require&channel_binding=require"
+      DATABASE_CONNECTION_URI:       "postgresql://neondb_owner:npg_MmQw8rHFN9OU@ep-withered-pond-aythlva6.c-5.us-east-2.aws.neon.tech/neondb?schema=evolution_api&sslmode=require"
       DATABASE_CONNECTION_CLIENT_NAME: evolution_api
       DATABASE_SAVE_DATA_INSTANCE:   "true"
       DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
