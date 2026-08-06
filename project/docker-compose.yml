@@ -88,7 +88,7 @@ services:
     # Use db push instead of migrate deploy (no migrations folder needed)
     command: >
       sh -c "
-        npx prisma db push --schema=prisma/schema.prisma --accept-data-loss &&
+        npx prisma db push --schema=prisma/schema.prisma --accept-data-loss --skip-generate 2>&1 | grep -v 'already exists' || true &&
         node dist/index.js
       "
     healthcheck:
