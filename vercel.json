@@ -1,5 +1,0 @@
-{
-  "buildCommand": "echo 'This project runs on Ubuntu VPS, not Vercel.'",
-  "outputDirectory": ".",
-  "installCommand": "echo 'skip'"
-}
