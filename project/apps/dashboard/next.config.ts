@@ -1,21 +1,16 @@
 import type { NextConfig } from 'next';
 
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  'http://localhost:3001';
-
 const nextConfig: NextConfig = {
   reactStrictMode: true,
 
-  // Proxy /api/* requests to the backend server-side.
-  // This removes cross-origin issues for REST API calls — the browser
-  // always talks to the same origin. Socket.IO connects directly
-  // to the backend (see lib/socket.ts) since Vercel serverless can't proxy WebSockets.
+  // Rewrite /api/* → our Next.js proxy route /api/proxy/*
+  // The proxy route (app/api/proxy/[...path]/route.ts) forwards server-side
+  // to the VPS backend — bypasses Vercel's DNS_HOSTNAME_RESOLVED_PRIVATE block.
   async rewrites() {
     return [
       {
         source: '/api/:path*',
-        destination: `${BACKEND_URL}/api/:path*`,
+        destination: '/api/proxy/:path*',
       },
     ];
   },
@@ -31,7 +26,6 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // Prevent Vercel edge from caching WhatsApp status and QR endpoints
         source: '/api/whatsapp/:path*',
         headers: [
           { key: 'Cache-Control', value: 'no-store, no-cache, must-revalidate' },
