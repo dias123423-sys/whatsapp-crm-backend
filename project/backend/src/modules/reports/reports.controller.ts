@@ -22,19 +22,19 @@ export class ReportsController {
 
   @Post('generate/night')
   async generateNight() {
-    const filePath = await this.reportsService.generateNightReport();
-    return { filePath: path.basename(filePath) };
+    const files = await this.reportsService.generateNightReport();
+    return { files: files.map(f => path.basename(f)) };
   }
 
   @Post('generate/daily')
   async generateDaily() {
-    const filePath = await this.reportsService.generateDailyReport();
-    return { filePath: path.basename(filePath) };
+    const files = await this.reportsService.generateDailyReport();
+    return { files: files.map(f => path.basename(f)) };
   }
 
   @Get('download')
   async download(@Query('file') file: string, @Res() res: Response) {
-    const filePath = path.join(process.cwd(), 'reports', file);
+    const filePath = path.join(process.cwd(), 'reports', path.basename(file));
     res.download(filePath);
   }
 }

@@ -15,45 +15,70 @@ export class LeadsService {
     private notifications: NotificationsGateway,
   ) {}
 
+  // ── Period ────────────────────────────────────────────────────────────────
   private determinePeriod(): 'DAY' | 'NIGHT' {
     const hour = dayjs().hour();
-    return hour >= 19 || hour < 8 ? 'NIGHT' : 'DAY';
+    return hour >= 19 || hour < 9 ? 'NIGHT' : 'DAY';
   }
 
+  // ── Create from WhatsApp webhook ──────────────────────────────────────────
+  // RULE: ALWAYS create a lead. procedureId = NULL if not detected.
   async createFromWebhook(data: {
     phone: string;
     name?: string;
     message: string;
+    messageType?: string;
     source?: string;
-    whatsappInstanceId?: string;
+    whatsappInstanceName?: string;
   }) {
     // Upsert client
     const client = await this.prisma.client.upsert({
       where: { phone: data.phone },
-      update: { name: data.name || undefined },
+      update: { ...(data.name ? { name: data.name } : {}) },
       create: {
         phone: data.phone,
         name: data.name || null,
-        source: (data.source as any) || 'WHATSAPP',
+        source: 'WHATSAPP',
       },
     });
 
-    // Detect procedure from message
-    const procedure = await this.detectProcedure(data.message);
+    // Try to detect procedure — NEVER block lead creation on this
+    let procedure: any = null;
+    try {
+      procedure = await this.detectProcedure(data.message);
+    } catch {
+      procedure = null;
+    }
 
-    // Get operator
-    const operatorId = await this.assignment.assignOperator();
+    // Auto-assign operator (Round Robin / Least Busy)
+    let operatorId: string | null = null;
+    try {
+      operatorId = await this.assignment.assignOperator();
+    } catch {
+      operatorId = null;
+    }
 
     const period = this.determinePeriod();
 
+    // Resolve WhatsApp account
+    let whatsappAccountId: string | null = null;
+    if (data.whatsappInstanceName) {
+      const wa = await this.prisma.whatsAppAccount.findUnique({
+        where: { instanceName: data.whatsappInstanceName },
+      });
+      whatsappAccountId = wa?.id ?? null;
+    }
+
+    // CREATE LEAD — always, no matter what
     const lead = await this.prisma.lead.create({
       data: {
         clientId: client.id,
         operatorId,
-        procedureId: procedure?.id,
-        price: procedure?.price,
-        source: (data.source as any) || 'WHATSAPP',
+        procedureId: procedure?.id ?? null,   // NULL if not detected
+        price: procedure?.price ?? null,
+        source: 'WHATSAPP',
         period,
+        status: 'NEW',
       },
       include: {
         client: true,
@@ -62,21 +87,28 @@ export class LeadsService {
       },
     });
 
-    // Add history
+    // History entry
+    const historyEvent = procedure
+      ? `Лид создан через WhatsApp | Процедура: ${procedure.name}`
+      : `Лид создан через WhatsApp | Процедура не определена`;
+
     await this.prisma.leadHistory.create({
       data: {
         leadId: lead.id,
-        event: 'Лид создан через WhatsApp',
-        details: `Сообщение: ${data.message.substring(0, 200)}`,
+        event: historyEvent,
+        details: data.message ? data.message.slice(0, 500) : `[${data.messageType || 'message'}]`,
       },
     });
 
     // Notify via WebSocket
-    this.notifications.notifyNewLead(lead);
+    try {
+      this.notifications.notifyNewLead(lead);
+    } catch {}
 
     return lead;
   }
 
+  // ── Create manually ────────────────────────────────────────────────────────
   async create(dto: CreateLeadDto) {
     let operatorId = dto.operatorId;
     if (!operatorId) {
@@ -87,10 +119,11 @@ export class LeadsService {
       data: {
         clientId: dto.clientId,
         operatorId,
-        procedureId: dto.procedureId,
-        price: dto.price,
+        procedureId: dto.procedureId ?? null,
+        price: dto.price ?? null,
         source: dto.source || 'MANUAL',
         period: this.determinePeriod(),
+        status: 'NEW',
       },
       include: { client: true, operator: true, procedure: true },
     });
@@ -99,10 +132,11 @@ export class LeadsService {
       data: { leadId: lead.id, event: 'Лид создан вручную' },
     });
 
-    this.notifications.notifyNewLead(lead);
+    try { this.notifications.notifyNewLead(lead); } catch {}
     return lead;
   }
 
+  // ── Find all ───────────────────────────────────────────────────────────────
   async findAll(filter: LeadFilterDto) {
     const where: any = {};
 
@@ -125,18 +159,21 @@ export class LeadsService {
       ];
     }
 
+    const skip = filter.skip || 0;
+    const take = filter.take || 50;
+
     const [data, total] = await Promise.all([
       this.prisma.lead.findMany({
         where,
         include: { client: true, operator: true, procedure: true },
         orderBy: { createdAt: 'desc' },
-        skip: filter.skip || 0,
-        take: filter.take || 50,
+        skip,
+        take,
       }),
       this.prisma.lead.count({ where }),
     ]);
 
-    return { data, total, skip: filter.skip || 0, take: filter.take || 50 };
+    return { data, total, skip, take };
   }
 
   async findByOperator(operatorId: string, filter: LeadFilterDto) {
@@ -175,15 +212,19 @@ export class LeadsService {
       include: { client: true, operator: true, procedure: true },
     });
 
-    if (dto.status) {
+    if (dto.status || dto.operatorId || dto.comment) {
       await this.prisma.leadHistory.create({
         data: {
           leadId: id,
-          event: `Статус изменён на ${dto.status}`,
-          details: dto.comment,
+          event: dto.status
+            ? `Статус изменён → ${dto.status}`
+            : dto.operatorId
+            ? `Назначен оператор`
+            : 'Обновлён комментарий',
+          details: dto.comment || null,
         },
       });
-      this.notifications.notifyLeadUpdate(lead);
+      try { this.notifications.notifyLeadUpdate(lead); } catch {}
     }
 
     return lead;
@@ -200,27 +241,32 @@ export class LeadsService {
     ]);
 
     const conversion = total > 0 ? Math.round((booked / total) * 100) : 0;
-
     return { newLeads, processed, booked, total, conversion };
   }
 
-  private async detectProcedure(message: string) {
-    const procedures = await this.prisma.procedure.findMany({ where: { isActive: true } });
-    const lower = message.toLowerCase()
+  // ── Procedure detection (secondary — never blocks lead creation) ──────────
+  async detectProcedure(message: string) {
+    if (!message || message.startsWith('[')) return null;
+
+    const procedures = await this.prisma.procedure.findMany({
+      where: { isActive: true },
+    });
+
+    const lower = message
+      .toLowerCase()
       .replace(/ё/g, 'е')
-      .replace(/[+*•]/g, ' ')
+      .replace(/[+*•\-]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
-    // Score each procedure — more matching keywords = higher score
+    // Score-based matching: longer keyword = more specific = higher score
     let best: { proc: any; score: number } | null = null;
 
     for (const proc of procedures) {
       let score = 0;
       for (const keyword of proc.keywords) {
-        const kw = keyword.toLowerCase().replace(/ё/g, 'е');
-        if (lower.includes(kw)) {
-          // Longer keyword match = more specific = higher score
+        const kw = keyword.toLowerCase().replace(/ё/g, 'е').trim();
+        if (kw && lower.includes(kw)) {
           score += kw.length;
         }
       }
@@ -229,6 +275,6 @@ export class LeadsService {
       }
     }
 
-    return best?.proc || null;
+    return best?.proc ?? null;
   }
 }
