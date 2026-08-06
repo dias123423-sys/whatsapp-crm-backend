@@ -1,376 +1,208 @@
-# WhatsApp Call-Center System
+# Call Center — Lead Automation System
 
-Production-ready WhatsApp appointment management system with Evolution API integration.
-
-## 🏗️ Architecture
+## Архитектура
 
 ```
-VPS (188.241.217.76)
-│
-├── Evolution API (port 8080)  ← WhatsApp Web API (Baileys)
-│   └── 4 instances: WA1, WA2, WA3, WA4
-│
-├── Backend (port 3001)        ← Express + Socket.IO
-│   ├── REST API
-│   ├── WebSocket (real-time)
-│   └── Webhook receiver
-│
-└── Neon PostgreSQL (external) ← Serverless Postgres
-    ├── public schema          → Backend data
-    └── evolution_api schema   → Evolution API data
+Instagram/Facebook Ads
+        ↓
+WhatsApp (4 номера)
+        ↓
+Evolution API  ←── webhook ──→  Backend (NestJS)
+                                        ↓
+                               Анализ сообщения:
+                               - имя, телефон
+                               - процедура (по ключевым словам)
+                               - цена, источник, время, период
+                                        ↓
+                               Создаётся Лид (NEW)
+                                        ↓
+                    ┌───────── Админка (React) ──────────┐
+                    │  Видит всех лидов                  │
+                    │  Назначает операторов              │
+                    │  Управляет WhatsApp (4 номера)     │
+                    │  Процедуры + цены                  │
+                    │  Отчёты Excel (скачивание)         │
+                    └───────────────┬────────────────────┘
+                                    ↓ назначить
+                    ┌───── Панель оператора (React) ─────┐
+                    │  Видит ТОЛЬКО своих клиентов       │
+                    │  Звонит (tel: ссылка)              │
+                    │  Пишет комментарии                 │
+                    │  Меняет статус                     │
+                    └────────────────────────────────────┘
 ```
 
-Dashboard runs locally on your machine (dev) or Vercel (production).
+## Стек
+
+| Слой | Технология |
+|------|-----------|
+| Backend | NestJS, TypeScript, Prisma ORM |
+| База данных | PostgreSQL 16 |
+| Кэш / Очереди | Redis 7, BullMQ |
+| WhatsApp | Evolution API |
+| Admin Panel | React 18, Vite, Tailwind CSS |
+| Operator Panel | React 18, Vite, Tailwind CSS |
+| Инфраструктура | Docker Compose, Nginx, Ubuntu |
+
+## Статусы лидов
+
+| Статус | Описание |
+|--------|---------|
+| `NEW` | Только поступил из WhatsApp |
+| `CALLING` | Оператор звонит |
+| `BOOKED` | Клиент записан |
+| `FOLLOW_UP` | Нужно перезвонить |
+| `NO_ANSWER` | Не отвечает |
+| `CLOSED` | Закрыт |
+
+## Ночной режим (19:00 – 08:00)
+
+Лиды автоматически получают период `NIGHT`.  
+Каждый день в **08:00** система генерирует `Night_Leads_Report.xlsx`.
 
 ---
 
-## 🚀 Quick Deploy to VPS
+## Быстрый старт (локально)
 
-**Prerequisites:** VPS Ubuntu 22.04, root access
+### 1. Backend
 
 ```bash
-# 1. Copy project to VPS
-scp -r project/ root@188.241.217.76:/opt/callcenter/
-
-# 2. SSH to VPS and run deploy script
-ssh root@188.241.217.76
-cd /opt/callcenter
-bash deploy/deploy.sh
-
-# 3. On your local machine — run dashboard
-cd apps/dashboard
+cd project/backend
+cp .env.example .env        # заполните значения
 npm install
-npm run dev
-# Open http://localhost:3000
-# Login: admin / Cocoage_1234$
+npx prisma generate
+npx prisma migrate deploy
+npx ts-node prisma/seed.ts  # создаёт admin + оператора + процедуры
+npm run start:dev
 ```
 
-**Full step-by-step guide:** [DEPLOY_INSTRUCTIONS.md](./DEPLOY_INSTRUCTIONS.md)
+### 2. Admin Panel
+
+```bash
+cd project/apps/admin
+npm install
+npm run dev                 # http://localhost:3000
+```
+
+### 3. Operator Panel
+
+```bash
+cd project/apps/operator
+npm install
+npm run dev                 # http://localhost:3002
+```
+
+### 4. Evolution API (Docker)
+
+```bash
+cd project
+docker compose up -d postgres redis evolution-api
+```
 
 ---
 
-## 📦 Tech Stack
+## Деплой на VPS (Ubuntu)
 
-### Backend
-- **Runtime:** Node.js 20 + TypeScript
-- **Framework:** Express 4
-- **Real-time:** Socket.IO 4
-- **Database:** Prisma ORM + PostgreSQL (Neon)
-- **WhatsApp:** Evolution API (Baileys-based)
-- **Excel:** ExcelJS
-- **Logs:** Winston
+```bash
+# Скопировать проект на сервер
+scp -r project/ root@188.241.217.76:/opt/callcenter/
 
-### Dashboard (Next.js)
-- **Framework:** Next.js 16 + React 19
-- **Styling:** Tailwind CSS
-- **State:** TanStack Query (React Query)
-- **Real-time:** Socket.IO Client
-- **UI:** Lucide icons, QRCode.react
+# Подключиться и запустить
+ssh root@188.241.217.76
+cd /opt/callcenter
+sudo bash deploy/deploy.sh
+```
 
-### Infrastructure
-- **Containerization:** Docker + Docker Compose
-- **Reverse Proxy:** nginx
-- **Database:** Neon PostgreSQL (serverless, pooling)
+После деплоя:
+
+| Сервис | URL |
+|--------|-----|
+| Админка | http://188.241.217.76:3000 |
+| Панель оператора | http://188.241.217.76:3002 |
+| Backend API | http://188.241.217.76:3001/api |
+| API Docs (Swagger) | http://188.241.217.76:3001/api/docs |
+| Evolution API | http://188.241.217.76:8080 |
 
 ---
 
-## 🗂️ Project Structure
+## Логины по умолчанию
+
+| Роль | Email | Пароль |
+|------|-------|--------|
+| Администратор | admin@callcenter.kz | admin123 |
+| Оператор | aizhan@callcenter.kz | operator123 |
+
+> **Обязательно смените пароли после первого входа!**
+
+---
+
+## Подключение WhatsApp
+
+1. Войти в Админку → раздел **WhatsApp**
+2. Нажать **"Добавить номер"**, ввести название (например `whatsapp-1`)
+3. Нажать **"QR-код"** на созданной карточке
+4. В телефоне: WhatsApp → Настройки → Связанные устройства → Привязать
+5. Статус изменится на **ONLINE**
+
+Webhook URL для Evolution API:
+```
+http://YOUR_SERVER/api/webhook/evolution
+```
+
+---
+
+## Обновление
+
+```bash
+ssh root@188.241.217.76
+cd /opt/callcenter
+sudo bash deploy/update.sh
+```
+
+---
+
+## Структура проекта
 
 ```
 project/
-├── backend/                     ← Express backend
+├── backend/                    # NestJS API
 │   ├── src/
-│   │   ├── index.ts             ← Entry point
-│   │   ├── database/
-│   │   │   └── prisma/
-│   │   │       └── schema.prisma
-│   │   ├── whatsapp/
-│   │   │   ├── evolution.client.ts  ← Evolution API HTTP client
-│   │   │   └── manager.ts           ← Manages WA1-4 instances
-│   │   ├── services/
-│   │   │   ├── appointment.service.ts
-│   │   │   ├── excel.service.ts
-│   │   │   └── socket.service.ts
-│   │   ├── routes/
-│   │   │   ├── auth.routes.ts
-│   │   │   ├── appointment.routes.ts
-│   │   │   ├── whatsapp.routes.ts
-│   │   │   └── webhook.routes.ts
-│   │   └── utils/
-│   │       ├── logger.ts
-│   │       └── appointment.detector.ts  ← RU/KZ date/time parser
-│   ├── Dockerfile
-│   └── .env                     ← ALREADY CONFIGURED
+│   │   ├── modules/
+│   │   │   ├── auth/           # JWT аутентификация
+│   │   │   ├── users/          # Пользователи
+│   │   │   ├── operators/      # Операторы
+│   │   │   ├── leads/          # Лиды (основная логика)
+│   │   │   ├── clients/        # Клиенты
+│   │   │   ├── whatsapp/       # Evolution API + Webhook
+│   │   │   ├── procedures/     # Процедуры и цены
+│   │   │   ├── assignment/     # Round Robin / Least Busy
+│   │   │   ├── calls/          # Логирование звонков
+│   │   │   ├── reports/        # Excel отчёты + планировщик
+│   │   │   └── notifications/  # WebSocket уведомления
+│   │   └── prisma/             # Prisma service
+│   └── prisma/
+│       ├── schema.prisma       # Схема БД
+│       └── seed.ts             # Начальные данные
 │
-├── apps/dashboard/              ← Next.js dashboard
-│   ├── app/
-│   ├── components/
-│   ├── hooks/
-│   ├── lib/
-│   └── .env.local               ← ALREADY CONFIGURED
+├── apps/
+│   ├── admin/                  # Админская панель (React)
+│   │   └── src/
+│   │       ├── pages/          # Dashboard, Leads, Operators, WhatsApp, Procedures, Reports, Settings
+│   │       ├── api/            # axios клиенты
+│   │       ├── components/     # Layout, Modal, StatusBadge
+│   │       └── store/          # Zustand (auth)
+│   │
+│   └── operator/               # Панель оператора (React)
+│       └── src/
+│           ├── pages/          # LeadsListPage, ClientCardPage
+│           ├── api/            # axios клиенты
+│           ├── components/     # Layout (WebSocket)
+│           └── store/          # Zustand (auth)
 │
-├── docker-compose.yml           ← Evolution API + Backend
 ├── deploy/
-│   ├── nginx.conf               ← Reverse proxy config
-│   ├── deploy.sh                ← VPS setup script
-│   └── update.sh                ← Update script
+│   ├── deploy.sh               # Первый деплой
+│   ├── update.sh               # Обновление
+│   └── nginx.conf              # Nginx конфиг
 │
-└── DEPLOY_INSTRUCTIONS.md       ← STEP-BY-STEP GUIDE
+└── docker-compose.yml          # Все сервисы
 ```
-
----
-
-## 🔑 Features
-
-### ✅ WhatsApp Management
-- 4 simultaneous WhatsApp accounts (WA1, WA2, WA3, WA4)
-- QR code scanning via dashboard
-- Auto-reconnect on disconnect
-- Session persistence (Docker volumes)
-- Real-time connection status
-
-### ✅ Appointment Detection
-- Automatic message parsing (Russian/Kazakh)
-- Date formats: "12.07", "12 июля", "завтра", "сегодня"
-- Time formats: "14:00", "14ч", "в 14"
-- BOT vs OPERATOR detection
-- Phone number extraction
-
-### ✅ Dashboard
-- Real-time updates via Socket.IO
-- Statistics cards (today/week/month)
-- Appointment filtering (date, account, creator)
-- Excel export (AINUR/AIBEK/BOT/ALL)
-- WhatsApp QR panel
-
-### ✅ Excel Reports
-- Multiple export types:
-  - **AINUR:** WA1 only
-  - **AIBEK:** WA2 + WA3 + WA4
-  - **BOT:** All BOT-created appointments
-  - **ALL:** Everything
-- Formatted headers, alternating rows
-- Color-coded BOT/OPERATOR
-
----
-
-## 🔧 Configuration
-
-All environment files are **ALREADY CONFIGURED**:
-
-### Backend (backend/.env)
-```bash
-DATABASE_URL=postgresql://...@neon.tech/neondb
-JWT_SECRET=ij6CETIv4NqBNQzKjKbiVzlz2WD6c9keUjewSR872OpBnTAS
-ADMIN_PASSWORD=Cocoage_1234$
-FRONTEND_URL=http://188.241.217.76:3000
-EVOLUTION_API_URL=http://localhost:8080
-EVOLUTION_API_KEY=429683C4C977415CAAFCCE10F7D57E11
-WEBHOOK_URL=http://172.16.0.2:3001/webhook/evolution
-```
-
-### Dashboard (apps/dashboard/.env.local)
-```bash
-NEXT_PUBLIC_API_URL=http://188.241.217.76:3001
-NEXT_PUBLIC_SOCKET_URL=http://188.241.217.76:3001
-```
-
----
-
-## 📡 API Endpoints
-
-### Authentication
-```http
-POST   /api/auth/login       → { token: "..." }
-GET    /api/auth/me          → { username: "admin" }
-```
-
-### Appointments
-```http
-GET    /api/appointments?page=1&limit=50
-GET    /api/appointments/stats
-GET    /api/appointments/export?type=AINUR|AIBEK|BOT|ALL
-GET    /api/appointments/:id
-DELETE /api/appointments/:id
-```
-
-### WhatsApp
-```http
-GET    /api/whatsapp/status       → All accounts status
-GET    /api/whatsapp/:id/qr       → QR code (WA1/WA2/WA3/WA4)
-POST   /api/whatsapp/:id/reset    → Logout & new QR
-```
-
-### Health
-```http
-GET    /health                    → { status: "ok", uptime: ... }
-```
-
----
-
-## 🔌 Socket.IO Events
-
-**Server → Client:**
-```javascript
-appointment:new       // New appointment created
-appointment:updated   // Appointment modified
-appointment:deleted   // Appointment removed
-stats:update          // Stats changed
-whatsapp:status       // Account connected/disconnected
-whatsapp:qr           // New QR code available
-```
-
----
-
-## 📝 How It Works
-
-### Message Flow
-
-```
-1. WhatsApp message arrives
-        ↓
-2. Evolution API receives via Baileys
-        ↓
-3. Evolution API POSTs webhook → Backend /webhook/evolution
-        ↓
-4. Backend: appointment.detector.ts parses message
-   - extractDate("завтра") → Date
-   - extractTime("14:00") → "14:00"
-   - extractPhone("+77011234567") → "+77011234567"
-   - extractClientName("Айбек") → "Айбек"
-   - detectCreatedBy(text, fromMe) → "BOT" | "OPERATOR"
-        ↓
-5. Backend: appointment.service.create()
-   - Save to Neon PostgreSQL
-   - Emit Socket.IO event → Dashboard updates in real-time
-        ↓
-6. Excel auto-generated on export request
-```
-
----
-
-## 🧪 Local Development
-
-### Backend
-```bash
-cd backend
-npm install
-cp .env.example .env  # Already done — use .env
-npx prisma generate --schema=src/database/prisma/schema.prisma
-npx prisma migrate deploy --schema=src/database/prisma/schema.prisma
-npm run dev
-```
-
-### Dashboard
-```bash
-cd apps/dashboard
-npm install
-npm run dev
-# Open http://localhost:3000
-```
-
----
-
-## 🐳 Docker Commands
-
-```bash
-# Start all services
-docker compose up -d --build
-
-# View logs
-docker compose logs -f backend
-docker compose logs -f evolution-api
-
-# Restart backend only
-docker compose restart backend
-
-# Stop all
-docker compose down
-
-# Stop + remove volumes (⚠️ loses QR sessions)
-docker compose down -v
-
-# Check status
-docker compose ps
-```
-
----
-
-## 🔐 Security
-
-- ✅ JWT authentication (7-day expiry)
-- ✅ CORS configured for dashboard origins
-- ✅ Helmet security headers
-- ✅ Rate limiting (500 req/15min)
-- ✅ UFW firewall on VPS
-- ⚠️ Currently HTTP — use certbot for HTTPS in production
-
----
-
-## 🛠️ Maintenance
-
-### Update Code (Zero-Downtime)
-```bash
-cd /opt/callcenter
-git pull
-bash deploy/update.sh
-```
-
-### Database Migrations
-```bash
-# On VPS
-cd /opt/callcenter
-docker compose exec backend npx prisma migrate deploy --schema=prisma/schema.prisma
-```
-
-### Logs
-```bash
-# Application logs (inside container)
-docker compose exec backend tail -f logs/combined.log
-
-# Container logs
-docker compose logs -f backend
-
-# Evolution API logs
-docker compose logs -f evolution-api
-```
-
----
-
-## 📞 Troubleshooting
-
-See [DEPLOY_INSTRUCTIONS.md](./DEPLOY_INSTRUCTIONS.md) → Troubleshooting section.
-
-Common issues:
-- Backend won't start → Check `DATABASE_URL`, run migrations
-- QR code not showing → Restart Evolution API: `docker compose restart evolution-api`
-- Socket.IO not connecting → Check CORS in `backend/src/index.ts`
-- Dashboard 401 errors → Check JWT_SECRET matches between backend and login
-
----
-
-## 📄 License
-
-MIT
-
----
-
-## 🤝 Support
-
-For deployment issues, check logs:
-```bash
-docker compose logs backend
-docker compose logs evolution-api
-```
-
-Database issues:
-- Neon dashboard: https://console.neon.tech
-- Check connection pooler status
-
-Evolution API issues:
-- Official docs: https://docs.evolutionfoundation.com.br
-- GitHub: https://github.com/evolution-foundation/evolution-api
-
----
-
-**Built with ❤️ for call-center automation**

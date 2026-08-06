@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
-# update.sh — обновление уже задеплоенного сервиса (zero-downtime)
+# update.sh — обновление без downtime
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/callcenter}"
+cd "$APP_DIR"
 
-cd "$APP_DIR/project"
-
-echo "⬇  Pulling latest code…"
+echo "⬇  Pulling latest code..."
 git pull --ff-only
 
-echo "🔨  Rebuilding backend…"
-docker compose build --no-cache backend
+echo "🔨  Rebuilding services..."
+docker compose build --no-cache backend admin operator
 
-echo "🔄  Restarting backend (Evolution API stays up)…"
-docker compose up -d --no-deps backend
+echo "🔄  Restarting (Evolution API stays up)..."
+docker compose up -d --no-deps backend admin operator
 
-echo "⏳  Waiting for health check…"
+echo "⏳  Waiting for backend health..."
 sleep 15
-docker compose ps
 
+echo "📦  Running migrations..."
+docker compose exec backend npx prisma migrate deploy
+
+docker compose ps
 echo "✅  Update complete"

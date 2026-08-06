@@ -1,44 +1,6 @@
-# Dependencies
 node_modules/
-.pnp
-.pnp.js
-
-# Build outputs
 dist/
-.next/
-out/
-build/
-
-# Environment (NEVER commit secrets)
 .env
-.env.local
-.env.*.local
-
-# WhatsApp sessions (NEVER commit)
-backend/sessions/
-**/sessions/
-
-# Reports
-backend/reports/*.xlsx
-**/reports/*.xlsx
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-
-# Runtime
+*.local
 .DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# TypeScript
-*.tsbuildinfo
-
-# Testing
-coverage/
+reports/*.xlsx

@@ -1,0 +1,493 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// WhatsApp Lead Automation CRM — Prisma Schema
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../../../../node_modules/.prisma/client"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_DIRECT_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  OPERATOR
+}
+
+enum LeadStatus {
+  NEW
+  CALLING
+  BOOKED
+  FOLLOW_UP
+  NO_ANSWER
+  CLOSED
+  DUPLICATE
+}
+
+enum AssignmentAlgorithm {
+  ROUND_ROBIN
+  LEAST_BUSY
+  MANUAL
+  VIP
+}
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum CallResult {
+  ANSWERED
+  NO_ANSWER
+  BUSY
+  VOICEMAIL
+  FAILED
+}
+
+enum ReportType {
+  DAILY
+  WEEKLY
+  MONTHLY
+  CUSTOM
+}
+
+enum NotificationChannel {
+  WEBSOCKET
+  TELEGRAM
+  EMAIL
+  BROWSER_PUSH
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  ASSIGN
+  STATUS_CHANGE
+  NOTE_ADD
+}
+
+// ─── 1. companies ─────────────────────────────────────────────────────────────
+model Company {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  phone       String?
+  email       String?
+  address     String?
+  logoUrl     String?  @map("logo_url")
+  timezone    String   @default("Asia/Almaty")
+  isActive    Boolean  @default(true) @map("is_active")
+  settings    Json     @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  branches    Branch[]
+  users       User[]
+  operators   Operator[]
+  campaigns   Campaign[]
+  procedures  Procedure[]
+  clients     Client[]
+  leads       Lead[]
+  auditLogs   AuditLog[]
+
+  @@map("companies")
+}
+
+// ─── 2. branches ──────────────────────────────────────────────────────────────
+model Branch {
+  id          String   @id @default(cuid())
+  companyId   String   @map("company_id")
+  name        String
+  address     String?
+  phone       String?
+  city        String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  operators   Operator[]
+  leads       Lead[]
+  campaigns   Campaign[]
+
+  @@index([companyId])
+  @@map("branches")
+}
+
+// ─── 3. users ─────────────────────────────────────────────────────────────────
+model User {
+  id            String    @id @default(cuid())
+  companyId     String    @map("company_id")
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  firstName     String    @map("first_name")
+  lastName      String    @map("last_name")
+  phone         String?
+  role          UserRole  @default(OPERATOR)
+  isActive      Boolean   @default(true) @map("is_active")
+  lastLoginAt   DateTime? @map("last_login_at")
+  telegramChatId String?  @map("telegram_chat_id")
+  avatarUrl     String?   @map("avatar_url")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  operator      Operator?
+  auditLogs     AuditLog[]
+  refreshTokens RefreshToken[]
+
+  @@index([companyId])
+  @@index([email])
+  @@map("users")
+}
+
+// ─── 4. refresh_tokens ────────────────────────────────────────────────────────
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─── 5. operators ─────────────────────────────────────────────────────────────
+model Operator {
+  id              String   @id @default(cuid())
+  userId          String   @unique @map("user_id")
+  companyId       String   @map("company_id")
+  branchId        String?  @map("branch_id")
+  displayName     String   @map("display_name")
+  isOnline        Boolean  @default(false) @map("is_online")
+  isAvailable     Boolean  @default(true) @map("is_available")
+  maxLeads        Int      @default(20) @map("max_leads")
+  assignmentOrder Int      @default(0) @map("assignment_order") // for round-robin
+  totalAssigned   Int      @default(0) @map("total_assigned")
+  skills          String[] // procedure slugs this operator handles
+  isVip           Boolean  @default(false) @map("is_vip") // handles VIP leads
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company         Company   @relation(fields: [companyId], references: [id])
+  branch          Branch?   @relation(fields: [branchId], references: [id])
+  leads           Lead[]
+  calls           Call[]
+  notes           Note[]
+
+  @@index([companyId])
+  @@index([branchId])
+  @@map("operators")
+}
+
+// ─── 6. procedures ────────────────────────────────────────────────────────────
+model Procedure {
+  id          String   @id @default(cuid())
+  companyId   String   @map("company_id")
+  name        String
+  slug        String
+  description String?
+  keywords    String[] // detection keywords
+  duration    Int?     // minutes
+  price       Decimal? @db.Decimal(10, 2)
+  isActive    Boolean  @default(true) @map("is_active")
+  color       String   @default("#3B82F6") // for UI badge
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  leads       Lead[]
+  campaigns   CampaignProcedure[]
+
+  @@unique([companyId, slug])
+  @@index([companyId])
+  @@map("procedures")
+}
+
+// ─── 7. campaigns ─────────────────────────────────────────────────────────────
+model Campaign {
+  id            String   @id @default(cuid())
+  companyId     String   @map("company_id")
+  branchId      String?  @map("branch_id")
+  name          String
+  slug          String
+  source        String   @default("facebook") // facebook | instagram | tiktok
+  utmSource     String?  @map("utm_source")
+  utmMedium     String?  @map("utm_medium")
+  utmCampaign   String?  @map("utm_campaign")
+  waAccountId   String   @map("wa_account_id") // WA1..WA4
+  budget        Decimal? @db.Decimal(10, 2)
+  isActive      Boolean  @default(true) @map("is_active")
+  assignAlgo    AssignmentAlgorithm @default(ROUND_ROBIN) @map("assign_algo")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch        Branch?   @relation(fields: [branchId], references: [id])
+  procedures    CampaignProcedure[]
+  ads           Ad[]
+  leads         Lead[]
+
+  @@unique([companyId, slug])
+  @@index([companyId])
+  @@map("campaigns")
+}
+
+// ─── 8. campaign_procedures (join) ────────────────────────────────────────────
+model CampaignProcedure {
+  campaignId  String @map("campaign_id")
+  procedureId String @map("procedure_id")
+
+  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  procedure   Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, procedureId])
+  @@map("campaign_procedures")
+}
+
+// ─── 9. ads ───────────────────────────────────────────────────────────────────
+model Ad {
+  id          String   @id @default(cuid())
+  campaignId  String   @map("campaign_id")
+  name        String
+  adId        String?  @map("ad_id")     // Facebook Ad ID
+  adSetId     String?  @map("ad_set_id")
+  prefillText String?  @map("prefill_text") // pre-filled WA message
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  leads       Lead[]
+
+  @@index([campaignId])
+  @@map("ads")
+}
+
+// ─── 10. clients ──────────────────────────────────────────────────────────────
+model Client {
+  id          String   @id @default(cuid())
+  companyId   String   @map("company_id")
+  phone       String
+  waName      String?  @map("wa_name")  // WhatsApp display name
+  firstName   String?  @map("first_name")
+  lastName    String?  @map("last_name")
+  email       String?
+  city        String?
+  isVip       Boolean  @default(false) @map("is_vip")
+  tags        String[]
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  leads       Lead[]
+  messages    Message[]
+
+  @@unique([companyId, phone])
+  @@index([companyId])
+  @@index([phone])
+  @@map("clients")
+}
+
+// ─── 11. leads ────────────────────────────────────────────────────────────────
+model Lead {
+  id              String     @id @default(cuid())
+  companyId       String     @map("company_id")
+  branchId        String?    @map("branch_id")
+  clientId        String     @map("client_id")
+  operatorId      String?    @map("operator_id")
+  campaignId      String?    @map("campaign_id")
+  adId            String?    @map("ad_id")
+  procedureId     String?    @map("procedure_id")
+
+  status          LeadStatus @default(NEW)
+  waAccountId     String     @map("wa_account_id")
+  firstMessage    String     @map("first_message") @db.Text
+  source          String     @default("whatsapp")
+  isDuplicate     Boolean    @default(false) @map("is_duplicate")
+  duplicateOfId   String?    @map("duplicate_of_id")
+  confidence      Float      @default(1.0) // procedure detection confidence
+  priority        Int        @default(0)   // 0=normal, 1=high, 2=urgent
+  scheduledCallAt DateTime?  @map("scheduled_call_at")
+  bookedAt        DateTime?  @map("booked_at")
+  closedAt        DateTime?  @map("closed_at")
+  lostReason      String?    @map("lost_reason")
+  metadata        Json       @default("{}")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  company         Company    @relation(fields: [companyId], references: [id])
+  branch          Branch?    @relation(fields: [branchId], references: [id])
+  client          Client     @relation(fields: [clientId], references: [id])
+  operator        Operator?  @relation(fields: [operatorId], references: [id])
+  campaign        Campaign?  @relation(fields: [campaignId], references: [id])
+  ad              Ad?        @relation(fields: [adId], references: [id])
+  procedure       Procedure? @relation(fields: [procedureId], references: [id])
+  duplicateOf     Lead?      @relation("Duplicates", fields: [duplicateOfId], references: [id])
+  duplicates      Lead[]     @relation("Duplicates")
+  calls           Call[]
+  notes           Note[]
+  messages        Message[]
+  statusHistory   LeadStatusHistory[]
+
+  @@index([companyId])
+  @@index([clientId])
+  @@index([operatorId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("leads")
+}
+
+// ─── 12. lead_status_history ──────────────────────────────────────────────────
+model LeadStatusHistory {
+  id         String     @id @default(cuid())
+  leadId     String     @map("lead_id")
+  fromStatus LeadStatus? @map("from_status")
+  toStatus   LeadStatus  @map("to_status")
+  changedBy  String?    @map("changed_by") // userId
+  note       String?
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  lead       Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@map("lead_status_history")
+}
+
+// ─── 13. messages ─────────────────────────────────────────────────────────────
+model Message {
+  id          String   @id @default(cuid())
+  leadId      String?  @map("lead_id")
+  clientId    String   @map("client_id")
+  waAccountId String   @map("wa_account_id")
+  waMessageId String?  @map("wa_message_id") @unique
+  fromMe      Boolean  @default(false) @map("from_me")
+  body        String   @db.Text
+  mediaType   String?  @map("media_type") // text | image | audio | video | document
+  mediaUrl    String?  @map("media_url")
+  timestamp   DateTime
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  lead        Lead?    @relation(fields: [leadId], references: [id])
+  client      Client   @relation(fields: [clientId], references: [id])
+
+  @@index([leadId])
+  @@index([clientId])
+  @@index([timestamp])
+  @@map("messages")
+}
+
+// ─── 14. calls ────────────────────────────────────────────────────────────────
+model Call {
+  id           String      @id @default(cuid())
+  leadId       String      @map("lead_id")
+  operatorId   String      @map("operator_id")
+  direction    CallDirection @default(OUTBOUND)
+  result       CallResult?
+  duration     Int?        // seconds
+  notes        String?     @db.Text
+  recordingUrl String?     @map("recording_url")
+  startedAt    DateTime?   @map("started_at")
+  endedAt      DateTime?   @map("ended_at")
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  lead         Lead     @relation(fields: [leadId], references: [id])
+  operator     Operator @relation(fields: [operatorId], references: [id])
+
+  @@index([leadId])
+  @@index([operatorId])
+  @@map("calls")
+}
+
+// ─── 15. notes ────────────────────────────────────────────────────────────────
+model Note {
+  id         String   @id @default(cuid())
+  leadId     String   @map("lead_id")
+  operatorId String   @map("operator_id")
+  body       String   @db.Text
+  isPinned   Boolean  @default(false) @map("is_pinned")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  operator   Operator @relation(fields: [operatorId], references: [id])
+
+  @@index([leadId])
+  @@map("notes")
+}
+
+// ─── 16. appointments ─────────────────────────────────────────────────────────
+model Appointment {
+  id           String    @id @default(cuid())
+  leadId       String    @unique @map("lead_id")
+  procedureId  String?   @map("procedure_id")
+  branchId     String?   @map("branch_id")
+  scheduledAt  DateTime  @map("scheduled_at")
+  duration     Int?      // minutes
+  status       String    @default("PENDING") // PENDING | CONFIRMED | CANCELLED | COMPLETED
+  notes        String?
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@index([scheduledAt])
+  @@map("appointments")
+}
+
+// ─── 17. audit_logs ───────────────────────────────────────────────────────────
+model AuditLog {
+  id          String      @id @default(cuid())
+  companyId   String      @map("company_id")
+  userId      String?     @map("user_id")
+  action      AuditAction
+  entity      String      // table name
+  entityId    String?     @map("entity_id")
+  oldValue    Json?       @map("old_value")
+  newValue    Json?       @map("new_value")
+  ip          String?
+  userAgent   String?     @map("user_agent")
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  company     Company @relation(fields: [companyId], references: [id])
+  user        User?   @relation(fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─── 18. reports ──────────────────────────────────────────────────────────────
+model Report {
+  id          String     @id @default(cuid())
+  companyId   String     @map("company_id")
+  type        ReportType
+  title       String
+  dateFrom    DateTime   @map("date_from")
+  dateTo      DateTime   @map("date_to")
+  data        Json       // serialized report data
+  fileUrl     String?    @map("file_url")
+  sentAt      DateTime?  @map("sent_at")
+  channels    NotificationChannel[]
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  @@index([companyId])
+  @@index([createdAt])
+  @@map("reports")
+}

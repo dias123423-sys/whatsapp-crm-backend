@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { @apply border-gray-200; }
+  body { @apply bg-gray-50 text-gray-900 antialiased; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+}
+
+@layer components {
+  .card { @apply bg-white rounded-xl shadow-sm border border-gray-100 p-5; }
+  .btn-primary { @apply bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-2 text-sm; }
+  .btn-secondary { @apply bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg font-medium border border-gray-200 transition-colors flex items-center gap-2 text-sm; }
+  .btn-danger { @apply bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 text-sm; }
+  .input { @apply w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white; }
+  .select { @apply w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white; }
+  .badge { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium; }
+  .status-dot { @apply inline-block w-2 h-2 rounded-full; }
+  .sidebar-link { @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors; }
+  .sidebar-link.active { @apply bg-blue-50 text-blue-700; }
+}
+
+/* Status badges */
+.status-NEW       { @apply bg-blue-100 text-blue-700; }
+.status-CALLING   { @apply bg-yellow-100 text-yellow-700; }
+.status-BOOKED    { @apply bg-green-100 text-green-700; }
+.status-FOLLOW_UP { @apply bg-purple-100 text-purple-700; }
+.status-NO_ANSWER { @apply bg-red-100 text-red-700; }
+.status-CLOSED    { @apply bg-gray-100 text-gray-600; }
+.status-DUPLICATE { @apply bg-orange-100 text-orange-700; }
