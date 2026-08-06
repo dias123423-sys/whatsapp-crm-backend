@@ -95,8 +95,8 @@ export function isAppointmentMessage(text: string): boolean {
   const hasBookingPhrase =
     // RU
     /запис|записала|записал|спасибо|подтвержд|визит|менеджер|клиент|имя|телефон/i.test(text) ||
-    // KZ
-    /жазып\s+қойдым|жаздым|жазылды|рахмет|расталды|менеджер|клиент|аты|телефон/i.test(text);
+    // KZ — expanded list
+    /жазып\s+қойдым|жаздым|жазылды|жазба|рахмет|расталды|менеджер|клиент|аты|телефон|сағат|ертең\s+сағат/i.test(text);
 
   return hasDate && hasTime && hasBookingPhrase;
 }
@@ -233,14 +233,18 @@ export function extractClientName(text: string): string {
 
   // ── "Клиент: Айбек" / "Аты: Диас" (KZ) / "Имя: Амина" ──
   const labelMatch = text.match(
-    /(?:клиент|имя|аты(?:-жөні)?|аты)\s*[:\-]\s*([А-ЯЁA-ZҒҚҢӨҰҮІа-яёa-zҒҚҢӨҰҮІ][А-ЯЁA-Za-zа-яёҒҚҢӨҰҮІғқңөұүі\-\.]{1,30}(?:\s+[А-ЯЁA-ZҒҚҢӨҰҮІ][А-ЯЁA-Za-zа-яёҒҚҢӨҰҮІ\-\.]{1,30})?)/i,
+    /(?:клиент|имя|аты(?:-жөні)?|аты)\s*[:\-]\s*([А-ЯЁA-ZҒҚҢӨҰҮІа-яёa-zҒҚҢӨҰҮІ][^\n\r,!?]{1,40})/i,
   );
-  if (labelMatch) return labelMatch[1].trim();
+  if (labelMatch) {
+    // Trim to first word-boundary — stop at \n, comma, digit-sequence, or "телефон"
+    const raw = labelMatch[1].trim();
+    const name = raw.split(/[\n\r,!?\d]|телефон/i)[0].trim();
+    if (name.length >= 2) return name;
+  }
 
   // ── RU: "Записала Алину на завтра" / "Записал Диаса в 14:00" ──
-  // Stops before "на"/"в"/<digit> to avoid grabbing the whole sentence
   const wroteRu = text.match(
-    /[Зз]аписал[аи]?\s+([А-ЯЁа-яё][а-яёА-ЯЁ\-\.]{1,20}(?:\s+[А-ЯЁ][а-яё\-\.]{1,20})?)\s+(?:на\b|в\b|\d)/u,
+    /[Зз]аписал[аи]?\s+([А-ЯЁа-яё][а-яёА-ЯЁ\-\.]{1,20}(?:\s+[А-ЯЁ][а-яё\-\.]{1,20})?)\s+(?:на\s|в\s|\d)/u,
   );
   if (wroteRu) return wroteRu[1].trim();
 
@@ -250,10 +254,12 @@ export function extractClientName(text: string): string {
   );
   if (wroteKz) return wroteKz[1].trim();
 
-  // ── Fallback: first token that starts with uppercase (any script) ──
+  // ── Fallback: first token that starts with uppercase (skip verb-like words) ──
+  const SKIP_WORDS = /^(записала?|спасибо|рахмет|здравствуйте|добрый|если|когда|вас|вам|я|мы|жазып|жаздым)$/i;
   for (const token of text.split(/\s+/)) {
     const clean = token.replace(/[^А-ЯЁA-Za-zа-яёҒҚҢӨҰҮІғқңөұүі\-\.]/g, '');
-    if (clean.length >= 2 && /^[А-ЯЁA-ZҒҚҢӨҰҮІ]/.test(clean)) return clean;
+    if (clean.length >= 2 && /^[А-ЯЁA-ZҒҚҢӨҰҮІ]/.test(clean) && !SKIP_WORDS.test(clean))
+      return clean;
   }
 
   return 'Клиент';
