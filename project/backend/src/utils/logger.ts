@@ -10,7 +10,15 @@ if (!fs.existsSync(LOG_DIR)) {
 const { combine, timestamp, printf, colorize, errors } = winston.format;
 
 const logFormat = printf(({ level, message, timestamp: ts, stack, ...meta }) => {
-  const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
+  let metaStr = '';
+  if (Object.keys(meta).length) {
+    try {
+      metaStr = ` ${JSON.stringify(meta)}`;
+    } catch {
+      // Circular reference — stringify what we can
+      metaStr = ` [non-serializable meta]`;
+    }
+  }
   return `${ts} [${level}]: ${stack ?? message}${metaStr}`;
 });
 

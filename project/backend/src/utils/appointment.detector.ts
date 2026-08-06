@@ -62,12 +62,16 @@ export function isAppointmentMessage(text: string): boolean {
     /\b\d{1,2}\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)/i.test(text);
 
   const hasTime =
-    /\b\d{1,2}:\d{2}\b/.test(text) ||   // 14:00
+    /\b\d{1,2}:\d{2}\b/.test(text) ||   // 14:00  ← most reliable
     /\b\d{1,2}ч\b/i.test(text) ||       // 14ч
-    /\bв\s+\d{1,2}\b/i.test(text) ||    // в 14
-    /\b\d{1,2}\.\d{2}\b/.test(text);    // 14.00
+    /\bв\s+\d{1,2}\b/i.test(text);      // в 14  (removed dot-time to avoid date/time ambiguity)
 
-  return hasDate && hasTime;
+  // Extra check: must contain a bot/booking-related phrase OR "запись" keyword
+  // to reduce false positives on random messages with dates
+  const hasBookingPhrase =
+    /запис|записала|записал|спасибо|подтвержд|визит|менеджер|salon|запись|клиент|имя|телефон/i.test(text);
+
+  return hasDate && hasTime && hasBookingPhrase;
 }
 
 // ─── Date extraction ─────────────────────────────────────────────────────────
@@ -125,7 +129,7 @@ export function extractDate(text: string): Date | null {
 // ─── Time extraction ─────────────────────────────────────────────────────────
 
 export function extractTime(text: string): string | null {
-  // "14:00" / "14:30"
+  // "14:00" / "14:30" — most specific, check first
   const colon = text.match(/\b(\d{1,2}):(\d{2})\b/);
   if (colon) {
     const h = parseInt(colon[1], 10);
@@ -135,23 +139,26 @@ export function extractTime(text: string): string | null {
     }
   }
 
-  // "14.00"
-  const dot = text.match(/\b(\d{1,2})\.(\d{2})\b/);
-  if (dot) {
-    const h = parseInt(dot[1], 10);
-    const m = parseInt(dot[2], 10);
-    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
-      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    }
-  }
-
-  // "14ч" or "в 14"
+  // "14ч" or "в 14" — before dot check to avoid matching dates
   const hourOnly =
     text.match(/\b(\d{1,2})ч\b/i) ??
     text.match(/\bв\s+(\d{1,2})\b/i);
   if (hourOnly) {
     const h = parseInt(hourOnly[1], 10);
     if (h >= 0 && h <= 23) return `${String(h).padStart(2, '0')}:00`;
+  }
+
+  // "14.00" — only match if looks like time (hour <= 23, minutes <= 59)
+  // Avoid matching date patterns like "12.07"
+  const dot = text.match(/\b(\d{1,2})\.(\d{2})\b/);
+  if (dot) {
+    const h = parseInt(dot[1], 10);
+    const m = parseInt(dot[2], 10);
+    // Only treat as time if minutes < 60 AND doesn't look like a date (month 1-12, day 1-31)
+    const looksLikeDate = h >= 1 && h <= 31 && m >= 1 && m <= 12;
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59 && !looksLikeDate) {
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
   }
 
   return null;

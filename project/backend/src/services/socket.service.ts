@@ -31,11 +31,12 @@ class SocketService {
     this.io = new SocketIOServer(httpServer, {
       path: '/socket.io',
       cors: {
-        origin: allowedOrigins.length ? allowedOrigins : '*',
+        // Allow any origin for Socket.IO — dashboard connects directly from browser
+        // and we can't restrict to specific origins without blocking Vercel preview URLs
+        origin: '*',
         methods: ['GET', 'POST'],
-        credentials: true,
+        credentials: false, // must be false when origin is '*'
       },
-      // Allow both polling and websocket — polling required for Vercel proxy
       transports: ['polling', 'websocket'],
       pingTimeout: 60000,
       pingInterval: 25000,

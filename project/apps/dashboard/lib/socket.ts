@@ -27,7 +27,6 @@ export function getSocket(): Socket {
   if (!socket) {
     socket = io(SOCKET_URL, {
       path: '/socket.io',
-      // Start with polling (always works cross-origin), then upgrade to WS.
       transports: ['polling', 'websocket'],
       upgrade: true,
       autoConnect: true,
@@ -36,7 +35,7 @@ export function getSocket(): Socket {
       reconnectionDelay: 1500,
       reconnectionDelayMax: 10000,
       timeout: 20000,
-      withCredentials: true,
+      withCredentials: false,
       forceNew: false,
     });
   }

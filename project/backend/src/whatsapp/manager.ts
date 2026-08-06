@@ -49,13 +49,17 @@ export async function initWhatsAppManager(): Promise<void> {
     state.set(accountId, { accountId, isConnected: false });
   }
 
-  // Create instances in Evolution API (idempotent — returns 400 if exists)
+  // Create instances in Evolution API (idempotent — returns 400/403 if exists)
   for (const accountId of WA_ACCOUNTS) {
     try {
       await evolutionClient.createInstance(accountId, webhookUrl);
+    } catch (err) {
+      logger.warn(`[Manager] createInstance ${accountId} failed — continuing: ${String(err instanceof Error ? err.message : err)}`);
+    }
+    try {
       await evolutionClient.setWebhook(accountId, webhookUrl);
     } catch (err) {
-      logger.error(`[Manager] Failed to init instance ${accountId}:`, err);
+      logger.warn(`[Manager] setWebhook ${accountId} failed — continuing: ${String(err instanceof Error ? err.message : err)}`);
     }
   }
 
@@ -77,7 +81,7 @@ async function syncAllStatuses(): Promise<void> {
       const isConnected = connState === 'open';
       await updateAccountState(accountId, { isConnected });
     } catch (err) {
-      logger.debug(`[Manager] Status check failed for ${accountId}: ${String(err)}`);
+      logger.debug(`[Manager] Status check failed for ${accountId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

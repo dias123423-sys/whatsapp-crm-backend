@@ -98,7 +98,7 @@ async function processMessage(
 
     await appointmentService.create({
       clientName:      parsed.clientName,
-      phone:           parsed.phone ?? extractSenderPhone(msg),
+      phone:           parsed.phone ?? extractSenderPhone(msg) ?? '',
       appointmentDate,
       appointmentTime: parsed.appointmentTime,
       whatsappAccount: accountId,

@@ -106,12 +106,13 @@ class EvolutionApiClient {
       logger.info(`[Evolution] Instance created: ${instanceName}`);
     } catch (err) {
       const axErr = err as AxiosError;
-      // 400 = already exists — that's fine
-      if (axErr.response?.status === 400) {
-        logger.debug(`[Evolution] Instance ${instanceName} already exists`);
+      // 400 or 403 = already exists — that's fine
+      if (axErr.response?.status === 400 || axErr.response?.status === 403) {
+        logger.debug(`[Evolution] Instance ${instanceName} already exists (${axErr.response.status})`);
         return;
       }
-      throw err;
+      // Re-throw only non-existence errors, but log cleanly to avoid circular JSON crash
+      logger.warn(`[Evolution] createInstance ${instanceName} failed: ${axErr.message}`);
     }
   }
 
