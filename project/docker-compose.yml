@@ -2,18 +2,38 @@ version: "3.9"
 
 # ─── Call-Center Stack ────────────────────────────────────────────────────────
 #
-# БД: Neon PostgreSQL (внешний, не нужен локальный postgres контейнер)
-# Services:
-#   evolution-api   — Evolution API (WhatsApp Baileys, порт 8080)
-#   backend         — Наш Express (порт 3001)
+# БД:
+#   - Backend       → Neon PostgreSQL (external, schema=callcenter)
+#   - Evolution API → local PostgreSQL (advisory locks + DDL migrations)
 #
-# Запуск:
-#   docker compose up -d --build
+# Services:
+#   postgres        — PostgreSQL 16 for Evolution API
+#   evolution-api   — WhatsApp Baileys API (port 8080)
+#   backend         — Our Express + Socket.IO (port 3001)
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
-  # ── Evolution API ────────────────────────────────────────────────────────────
+  # ── PostgreSQL — только для Evolution API ────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: callcenter_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     evolution
+      POSTGRES_PASSWORD: evolution_pass
+      POSTGRES_DB:       evolution_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - callcenter
+
+  # ── Evolution API ─────────────────────────────────────────────────────────────
   evolution-api:
     image: evoapicloud/evolution-api:latest
     container_name: callcenter_evolution
@@ -26,14 +46,12 @@ services:
       CORS_ORIGIN:  "*"
       CORS_CREDENTIALS: "true"
 
-      # Auth
       AUTHENTICATION_API_KEY: "429683C4C977415CAAFCCE10F7D57E11"
       AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
 
-      # Database — Neon PostgreSQL, отдельная schema evolution_api
-      # IMPORTANT: use direct (non-pooler) URL for migrations (DDL support)
+      # Local postgres — supports advisory locks needed by Prisma migrate
       DATABASE_PROVIDER:             postgresql
-      DATABASE_CONNECTION_URI:       "postgresql://neondb_owner:npg_MmQw8rHFN9OU@ep-withered-pond-aythlva6.c-5.us-east-2.aws.neon.tech/neondb?schema=evolution_api&sslmode=require"
+      DATABASE_CONNECTION_URI:       "postgresql://evolution:evolution_pass@postgres:5432/evolution_db?schema=public"
       DATABASE_CONNECTION_CLIENT_NAME: evolution_api
       DATABASE_SAVE_DATA_INSTANCE:   "true"
       DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
@@ -43,28 +61,25 @@ services:
       DATABASE_SAVE_DATA_HISTORIC:   "true"
       DATABASE_DELETE_MESSAGE:       "true"
 
-      # Redis — отключено (без Redis проще для старта)
-      CACHE_REDIS_ENABLED: "false"
-      CACHE_LOCAL_ENABLED: "true"
-
-      # QR
-      QRCODE_LIMIT: "30"
-      DEL_INSTANCE: "false"
-
-      # Webhook (глобальный выключен — наш backend ставит per-instance)
+      CACHE_REDIS_ENABLED:  "false"
+      CACHE_LOCAL_ENABLED:  "true"
+      QRCODE_LIMIT:         "30"
+      DEL_INSTANCE:         "false"
       WEBHOOK_GLOBAL_ENABLED: "false"
 
       LOG_LEVEL:   "ERROR,WARN,INFO"
       LOG_BAILEYS: "error"
-
-      LANGUAGE: "en"
+      LANGUAGE:    "en"
 
     volumes:
       - evolution_data:/evolution/instances
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - callcenter
 
-  # ── Backend ──────────────────────────────────────────────────────────────────
+  # ── Backend ───────────────────────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
@@ -76,20 +91,21 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # Evolution API достижим через Docker network
+      # Neon PostgreSQL with dedicated schema for our backend
+      DATABASE_URL: "postgresql://neondb_owner:npg_MmQw8rHFN9OU@ep-withered-pond-aythlva6-pooler.c-5.us-east-2.aws.neon.tech/neondb?schema=callcenter&sslmode=require&channel_binding=require"
+      # Evolution API reachable by service name inside Docker network
       EVOLUTION_API_URL: "http://evolution-api:8080"
-      # Webhook — evolution-api контейнер постит сюда (через host network)
-      WEBHOOK_URL: "http://172.16.0.2:3001/webhook/evolution"
+      # Webhook — Evolution API posts here (same Docker network)
+      WEBHOOK_URL: "http://backend:3001/webhook/evolution"
       NODE_ENV: production
     volumes:
       - backend_reports:/app/reports
       - backend_logs:/app/logs
     depends_on:
       - evolution-api
-    # Use db push instead of migrate deploy (no migrations folder needed)
     command: >
       sh -c "
-        npx prisma db push --schema=prisma/schema.prisma --accept-data-loss --skip-generate 2>&1 | grep -v 'already exists' || true &&
+        npx prisma db push --schema=prisma/schema.prisma --accept-data-loss --skip-generate 2>&1 | grep -E '(sync|error|Error)' || true &&
         node dist/index.js
       "
     healthcheck:
@@ -103,6 +119,7 @@ services:
 
 # ─── Volumes ──────────────────────────────────────────────────────────────────
 volumes:
+  postgres_data:
   evolution_data:
   backend_reports:
   backend_logs:
