@@ -160,7 +160,8 @@ export const appointmentService = {
 
   async logActivity(accountId: string, eventType: string, message: string, metadata?: Record<string, unknown>) {
     try {
-      await prisma.activityLog.create({ data: { accountId, eventType, message, metadata } });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await prisma.activityLog.create({ data: { accountId, eventType, message, metadata: metadata as any } });
     } catch (err) {
       logger.warn(`Failed to write activity log: ${String(err)}`);
     }

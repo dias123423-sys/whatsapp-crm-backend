@@ -147,3 +147,5 @@ function extractSenderPhone(msg: Record<string, unknown>): string {
   }
   return '';
 }
+
+export default router;
