@@ -75,21 +75,21 @@ export function isAppointmentMessage(text: string): boolean {
   // ── Date patterns ──
   const hasDate =
     /\b\d{1,2}[./]\d{1,2}/.test(text) ||
-    // RU relative
+    // RU relative (ASCII word boundary OK here)
     /\b(сегодня|завтра|послезавтра)\b/i.test(text) ||
-    // KZ relative
-    /\b(бүгін|ертең|бүрсігүні)\b/i.test(text) ||
+    // KZ relative — no \b, use space/start/end anchors (Cyrillic \b broken in JS)
+    /(^|\s)(бүгін|ертең|бүрсігүні)(\s|$|[.,!])/i.test(text) ||
     // RU month name
     /\b\d{1,2}\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)/i.test(text) ||
     // KZ month name
-    /\b\d{1,2}\s+(қаңтар|ақпан|наурыз|сәуір|мамыр|маусым|шілде|тамыз|қыркүйек|қазан|қараша|желтоқсан)/i.test(text);
+    /\d{1,2}\s+(қаңтар|ақпан|наурыз|сәуір|мамыр|маусым|шілде|тамыз|қыркүйек|қазан|қараша|желтоқсан)/i.test(text);
 
   // ── Time patterns ──
   const hasTime =
     /\b\d{1,2}:\d{2}\b/.test(text) ||
     /\b\d{1,2}ч\b/i.test(text) ||
     /\bв\s+\d{1,2}\b/i.test(text) ||
-    /\bсағат\s+\d{1,2}/i.test(text); // KZ "сағат 14" = "в 14 часов"
+    /сағат\s+\d{1,2}/i.test(text); // KZ "сағат 14" — no \b needed
 
   // ── Booking keyword gate (cuts false positives) ──
   const hasBookingPhrase =
@@ -126,9 +126,9 @@ export function extractDate(text: string): Date | null {
   if (/\bпослезавтра\b/i.test(text)) return startOfDay(addDays(now, 2));
 
   // ── KZ relative ──
-  if (/\bбүгін\b/i.test(text)) return startOfDay(now);
-  if (/\bертең\b/i.test(text)) return startOfDay(addDays(now, 1));
-  if (/\bбүрсігүні\b/i.test(text)) return startOfDay(addDays(now, 2));
+  if (/(^|\s)бүгін(\s|$|[.,!])/i.test(text)) return startOfDay(now);
+  if (/(^|\s)ертең(\s|$|[.,!])/i.test(text)) return startOfDay(addDays(now, 1));
+  if (/(^|\s)бүрсігүні(\s|$|[.,!])/i.test(text)) return startOfDay(addDays(now, 2));
 
   // ── RU month name: "12 июля" / "12июля" ──
   const ruMonth = text.match(
@@ -187,11 +187,11 @@ export function extractTime(text: string): string | null {
       return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
-  // "14ч" / "в 14" / "сағат 14" (KZ)
+  // "14ч" / "в 14" / "сағат 14" (KZ) — no \b on Cyrillic
   const hourOnly =
     text.match(/\b(\d{1,2})ч\b/i) ??
     text.match(/\bв\s+(\d{1,2})\b/i) ??
-    text.match(/\bсағат\s+(\d{1,2})\b/i);
+    text.match(/сағат\s+(\d{1,2})/i);
   if (hourOnly) {
     const h = parseInt(hourOnly[1], 10);
     if (h >= 0 && h <= 23) return `${String(h).padStart(2, '0')}:00`;
