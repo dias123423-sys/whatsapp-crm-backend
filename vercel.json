@@ -1,6 +1,5 @@
 {
-  "framework": "nextjs",
-  "installCommand": "npm install",
-  "buildCommand": "npm run build",
-  "outputDirectory": ".next"
+  "buildCommand": "echo 'This project runs on Ubuntu VPS, not Vercel.'",
+  "outputDirectory": ".",
+  "installCommand": "echo 'skip'"
 }
