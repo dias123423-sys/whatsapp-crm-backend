@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.next/
+out/
+build/
+
+# Environment files — NEVER commit secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.local.example
+
+# WhatsApp sessions
+**/sessions/
+
+# Reports / Excel
+**/reports/*.xlsx
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# TypeScript
+*.tsbuildinfo
+
+# Coverage
+coverage/
+
+# Prisma generated (regenerated on deploy)
+# keep schema.prisma but ignore generated client in src

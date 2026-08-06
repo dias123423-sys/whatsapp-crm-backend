@@ -1,0 +1,7 @@
+{
+  "buildCommand": "cd project/apps/dashboard && npm install && npm run build",
+  "outputDirectory": "project/apps/dashboard/.next",
+  "installCommand": "cd project/apps/dashboard && npm install",
+  "framework": null,
+  "devCommand": "cd project/apps/dashboard && npm run dev"
+}
