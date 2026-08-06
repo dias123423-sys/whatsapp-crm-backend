@@ -1,16 +1,31 @@
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
+
+RUN apt-get update -qq && \
+    apt-get install -y openssl libssl-dev ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci
 
-COPY . .
+COPY tsconfig.json ./
+COPY nest-cli.json ./
+COPY src ./src
+COPY prisma ./prisma
+
 RUN npx prisma generate
 RUN npm run build
 
-# ── Production image ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS production
+# Verify dist was created
+RUN ls -la dist/ && echo "Build OK"
+
+# ── Production ────────────────────────────────────────────────────────────────
+FROM node:20-slim AS production
+
+RUN apt-get update -qq && \
+    apt-get install -y openssl libssl-dev ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -26,4 +41,4 @@ RUN mkdir -p reports
 
 EXPOSE 3001
 
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main"]
