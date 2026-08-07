@@ -36,9 +36,9 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── Evolution API v1.8.x — uses @s.whatsapp.net (no @lid) ────────────────────
+  # ── Evolution API v2.x — with proper webhook config ──────────────────────────
   evolution-api:
-    image: atendai/evolution-api:v1.8.2
+    image: atendai/evolution-api:v2.1.1
     container_name: cc_evolution
     restart: unless-stopped
     ports:
