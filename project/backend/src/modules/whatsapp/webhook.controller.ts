@@ -68,7 +68,9 @@ export class WebhookController {
         if (fromMe) continue;
 
         // Extract phone — support all JID formats
+        // IMPORTANT: @lid is internal WhatsApp ID, real phone is in remoteJidAlt
         const jid: string =
+          msg?.key?.remoteJidAlt ||  // Real phone number (priority)
           msg?.key?.remoteJid ||
           msg?.remoteJid ||
           msg?.from ||
@@ -78,8 +80,13 @@ export class WebhookController {
         // Skip group messages
         if (!jid || jid.includes('@g.us') || jid.includes('@broadcast')) continue;
 
-        const phone = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').trim();
-        if (!phone || phone.length < 5) continue;
+        // Extract clean phone number
+        const phone = jid
+          .replace('@s.whatsapp.net', '')
+          .replace('@c.us', '')
+          .replace('@lid', '')   // Remove lid suffix if remoteJidAlt not available
+          .trim();
+        if (!phone || phone.length < 5 || phone.includes('@')) continue;
 
         // Extract name
         const pushName: string =

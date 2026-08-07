@@ -246,18 +246,26 @@ export class LeadsService {
 
   // ── Procedure detection (secondary — never blocks lead creation) ──────────
   async detectProcedure(message: string) {
-    if (!message || message.startsWith('[')) return null;
+    if (!message) return null;
 
     const procedures = await this.prisma.procedure.findMany({
       where: { isActive: true },
     });
 
+    // Normalize text
     const lower = message
       .toLowerCase()
       .replace(/ё/g, 'е')
-      .replace(/[+*•\-]/g, ' ')
+      .replace(/[+*•\-_]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+
+    // Skip obvious non-procedure messages
+    const skipPatterns = [
+      /^\[.*\]$/,      // [media], [sticker] etc
+      /^(ok|ок|да|нет|иә|жоқ|привет|сәлем|hello|hi|👍|👋|❤️|😊|\?+|!+|\.+)$/i,
+    ];
+    if (skipPatterns.some(p => p.test(lower.trim()))) return null;
 
     // Score-based matching: longer keyword = more specific = higher score
     let best: { proc: any; score: number } | null = null;
@@ -267,8 +275,13 @@ export class LeadsService {
       for (const keyword of proc.keywords) {
         const kw = keyword.toLowerCase().replace(/ё/g, 'е').trim();
         if (kw && lower.includes(kw)) {
-          score += kw.length;
+          score += kw.length * 2; // Weight longer matches more
         }
+      }
+      // Also check procedure name itself
+      const procName = proc.name.toLowerCase().replace(/ё/g, 'е');
+      if (lower.includes(procName)) {
+        score += procName.length * 3;
       }
       if (score > 0 && (!best || score > best.score)) {
         best = { proc, score };
