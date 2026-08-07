@@ -9,31 +9,10 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   app.enableCors({
-    origin: (origin, callback) => {
-      // Allow: localhost, Vercel domains, nip.io, any *.vercel.app
-      const allowed = [
-        'http://localhost:3000',
-        'http://localhost:3002',
-        process.env.ADMIN_URL,
-        process.env.OPERATOR_URL,
-      ].filter(Boolean);
-
-      if (
-        !origin ||
-        allowed.includes(origin) ||
-        /\.vercel\.app$/.test(origin) ||
-        /\.nip\.io$/.test(origin) ||
-        /\.trycloudflare\.com$/.test(origin) ||
-        origin === `https://${process.env.API_DOMAIN}`
-      ) {
-        callback(null, true);
-      } else {
-        callback(null, true); // Allow all for now — tighten in production if needed
-      }
-    },
+    origin: '*',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'apikey'],
   });
 
   app.useGlobalPipes(
