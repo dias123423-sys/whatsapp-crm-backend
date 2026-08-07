@@ -38,7 +38,7 @@ services:
 
   # ── Evolution API v2.x — with proper webhook config ──────────────────────────
   evolution-api:
-    image: atendai/evolution-api:latest
+    image: evoapicloud/evolution-api:latest
     container_name: cc_evolution
     restart: unless-stopped
     ports:
