@@ -3,9 +3,10 @@ import { EvolutionService } from './evolution.service';
 import { WhatsAppController } from './whatsapp.controller';
 import { WebhookController } from './webhook.controller';
 import { LeadsModule } from '../leads/leads.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [LeadsModule],
+  imports: [LeadsModule, NotificationsModule],
   providers: [EvolutionService],
   controllers: [WhatsAppController, WebhookController],
   exports: [EvolutionService],

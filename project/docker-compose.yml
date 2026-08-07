@@ -1,21 +1,17 @@
-version: '3.9'
-
 services:
-  # ── PostgreSQL ────────────────────────────────────────────────────────────────
-  postgres:
+  # ── PostgreSQL (Evolution) ────────────────────────────────────────────────────
+  cc_evo_postgres:
     image: postgres:16-alpine
-    container_name: cc_postgres
+    container_name: cc_evo_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: callcenter
-      POSTGRES_USER: callcenter
-      POSTGRES_PASSWORD: callcenter123
+      POSTGRES_DB: evolution_db
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution_pass
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - '5432:5432'
+      - evo_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U callcenter']
+      test: ['CMD-SHELL', 'pg_isready -U evolution']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -28,15 +24,14 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
-    ports:
-      - '6379:6379'
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
       timeout: 3s
       retries: 5
 
-  evolution-api:
+  # ── Evolution API ─────────────────────────────────────────────────────────────
+  cc_evolution:
     image: evoapicloud/evolution-api:latest
     container_name: cc_evolution
     restart: unless-stopped
@@ -60,8 +55,7 @@ services:
       - LOG_LEVEL=ERROR
       - DEL_INSTANCE=false
       - QRCODE_LIMIT=30
-      # Webhook events
-      - WEBHOOK_GLOBAL_URL=http://backend:3001/api/webhook/evolution
+      - WEBHOOK_GLOBAL_URL=http://cc_backend:3001/api/webhook/evolution
       - WEBHOOK_GLOBAL_ENABLED=true
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
       - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
@@ -71,28 +65,13 @@ services:
     volumes:
       - evolution_data:/evolution/instances
     depends_on:
-      - cc_evo_postgres
-      - redis
-
-  # ── Separate PostgreSQL for Evolution ─────────────────────────────────────────
-  cc_evo_postgres:
-    image: postgres:16-alpine
-    container_name: cc_evo_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: evolution_db
-      POSTGRES_USER: evolution
-      POSTGRES_PASSWORD: evolution_pass
-    volumes:
-      - evo_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U evolution']
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      cc_evo_postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   # ── Backend (NestJS) ──────────────────────────────────────────────────────────
-  backend:
+  cc_backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -103,40 +82,15 @@ services:
     env_file:
       - ./backend/.env.production
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
+        condition: service_healthy
+      cc_evo_postgres:
         condition: service_healthy
     volumes:
       - backend_reports:/app/reports
 
-  # ── Admin Panel ───────────────────────────────────────────────────────────────
-  admin:
-    build:
-      context: ./apps/admin
-      dockerfile: Dockerfile
-    container_name: cc_admin
-    restart: unless-stopped
-    ports:
-      - '3000:80'
-    depends_on:
-      - backend
-
-  # ── Operator Panel ────────────────────────────────────────────────────────────
-  operator:
-    build:
-      context: ./apps/operator
-      dockerfile: Dockerfile
-    container_name: cc_operator
-    restart: unless-stopped
-    ports:
-      - '3002:80'
-    depends_on:
-      - backend
-
 volumes:
-  postgres_data:
+  evo_postgres_data:
   redis_data:
   evolution_data:
-  evo_postgres_data:
   backend_reports:
