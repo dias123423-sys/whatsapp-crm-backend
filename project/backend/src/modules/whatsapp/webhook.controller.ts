@@ -28,6 +28,27 @@ export class WebhookController {
   ) {
     this.evoBaseUrl = this.config.get('EVOLUTION_API_URL', 'http://localhost:8080');
     this.evoApiKey  = this.config.get('EVOLUTION_API_KEY', '');
+
+    // Load own numbers from DB dynamically on first message
+    this.loadOwnNumbers();
+  }
+
+  private async loadOwnNumbers() {
+    try {
+      const accounts = await this.prisma.whatsAppAccount.findMany({
+        where: { phone: { not: null }, status: 'ONLINE' },
+        select: { phone: true },
+      });
+      for (const acc of accounts) {
+        if (acc.phone) {
+          const clean = acc.phone.replace('+','').replace(/\s/g,'');
+          this.OWN_NUMBERS.add(clean);
+        }
+      }
+      this.logger.log(`Own numbers loaded: ${[...this.OWN_NUMBERS].join(', ')}`);
+    } catch {
+      // fallback to hardcoded
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
