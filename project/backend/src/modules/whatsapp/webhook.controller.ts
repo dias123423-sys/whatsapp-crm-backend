@@ -152,8 +152,7 @@ export class WebhookController implements OnModuleInit {
   }
 
   // ── Get clean phone number from key ────────────────────────────────────────
-  // Evolution v1.8.x always uses @s.whatsapp.net (no @lid)
-  // Evolution v2.x may use @lid — we extract the number prefix
+  // Evolution v1.8.x: @s.whatsapp.net  |  Evolution v2.x: may use @lid
   private getPhone(key: any): string | null {
     if (!key) return null;
 
@@ -164,25 +163,34 @@ export class WebhookController implements OnModuleInit {
     ].filter(Boolean) as string[];
 
     for (const jid of candidates) {
+      if (!jid) continue;
       if (jid.includes('@g.us') || jid.includes('@broadcast') || jid.includes('@newsletter')) continue;
 
-      // @s.whatsapp.net — real phone
+      // @s.whatsapp.net or @c.us — real phone number
       if (jid.includes('@s.whatsapp.net') || jid.includes('@c.us')) {
         const p = jid.replace(/@s\.whatsapp\.net|@c\.us/g, '').trim();
         if (p.length >= 7 && /^\d+$/.test(p)) return p;
       }
 
-      // @lid — Evolution v2.x internal ID
-      // KZ numbers: 11 digits starting with 77 → real phone
+      // @lid — Evolution v2.x internal LID
+      // LIDs that look like phone numbers (KZ: 77xxxxxxxxx — 11 digits)
       if (jid.includes('@lid')) {
         const lid = jid.replace('@lid', '').trim();
-        // KZ number pattern: exactly 11 digits starting with 77
+        // KZ: exactly 11 digits starting with 77
         if (/^77\d{9}$/.test(lid)) return lid;
-        // Generic: 10-12 digits starting with 7
-        if (/^7\d{9,11}$/.test(lid)) return lid.slice(0, 11);
-        // Store with prefix so admin can see it (not ideal but 100% capture)
-        return null; // skip non-phone @lid
+        // RU/KZ: 11 digits starting with 7
+        if (/^7\d{10}$/.test(lid)) return lid;
+        // 10 digit number (without country code) — prefix with 7
+        if (/^\d{10}$/.test(lid) && lid.startsWith('7')) return `7${lid.slice(1)}`;
+        // Any 10+ digit number — store as-is for 100% capture
+        if (/^\d{10,15}$/.test(lid)) return lid;
+        // Non-numeric LID — skip (it's a real internal ID, not a phone)
+        continue;
       }
+
+      // Plain number without suffix
+      const plain = jid.trim();
+      if (/^\d{10,15}$/.test(plain)) return plain;
     }
 
     return null;
@@ -229,10 +237,24 @@ export class WebhookController implements OnModuleInit {
       const state = payload?.data?.state || payload?.state || '';
       if (!instanceName) return;
       const status = state === 'open' ? 'ONLINE' : state === 'connecting' ? 'CONNECTING' : 'OFFLINE';
+      
+      // Extract phone number when connected (state=open)
+      let phone: string | null = null;
+      if (state === 'open') {
+        const ownerJid = payload?.data?.instance?.ownerJid || '';
+        if (ownerJid) {
+          phone = ownerJid.split('@')[0]?.replace(/\D/g, '') || null;
+        }
+      }
+      
       await this.prisma.whatsAppAccount.updateMany({
-        where: { instanceName }, data: { status },
+        where: { instanceName },
+        data: {
+          status,
+          ...(phone ? { phone } : {}),
+        },
       });
-      this.logger.log(`🔗 ${instanceName} → ${status}`);
+      this.logger.log(`🔗 ${instanceName} → ${status}${phone ? ` | +${phone}` : ''}`);
     } catch (err) {
       this.logger.error('Connection update error: ' + err?.message);
     }
