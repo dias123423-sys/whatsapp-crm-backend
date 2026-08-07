@@ -1,5 +1,6 @@
 services:
-  # ── PostgreSQL (Evolution) ────────────────────────────────────────────────────
+
+  # ── PostgreSQL для Evolution API ──────────────────────────────────────────────
   cc_evo_postgres:
     image: postgres:16-alpine
     container_name: cc_evo_postgres
@@ -17,7 +18,7 @@ services:
       retries: 5
 
   # ── Redis ─────────────────────────────────────────────────────────────────────
-  redis:
+  cc_redis:
     image: redis:7-alpine
     container_name: cc_redis
     restart: unless-stopped
@@ -50,8 +51,7 @@ services:
       - DATABASE_SAVE_MESSAGE_UPDATE=true
       - DATABASE_SAVE_DATA_CONTACTS=true
       - DATABASE_SAVE_DATA_CHATS=true
-      - REDIS_ENABLED=true
-      - REDIS_URI=redis://redis:6379
+      - REDIS_ENABLED=false
       - LOG_LEVEL=ERROR
       - DEL_INSTANCE=false
       - QRCODE_LIMIT=30
@@ -67,8 +67,6 @@ services:
     depends_on:
       cc_evo_postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
 
   # ── Backend (NestJS) ──────────────────────────────────────────────────────────
   cc_backend:
@@ -82,12 +80,36 @@ services:
     env_file:
       - ./backend/.env.production
     depends_on:
-      redis:
+      cc_redis:
         condition: service_healthy
       cc_evo_postgres:
         condition: service_healthy
     volumes:
       - backend_reports:/app/reports
+
+  # ── Admin Panel ───────────────────────────────────────────────────────────────
+  cc_admin:
+    build:
+      context: ./apps/admin
+      dockerfile: Dockerfile
+    container_name: cc_admin
+    restart: unless-stopped
+    ports:
+      - '3000:80'
+    depends_on:
+      - cc_backend
+
+  # ── Operator Panel ────────────────────────────────────────────────────────────
+  cc_operator:
+    build:
+      context: ./apps/operator
+      dockerfile: Dockerfile
+    container_name: cc_operator
+    restart: unless-stopped
+    ports:
+      - '3002:80'
+    depends_on:
+      - cc_backend
 
 volumes:
   evo_postgres_data:
