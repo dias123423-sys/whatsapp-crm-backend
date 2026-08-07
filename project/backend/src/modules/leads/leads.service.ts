@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AssignmentService } from '../assignment/assignment.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { SseService } from '../notifications/sse.service';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 import { LeadFilterDto } from './dto/lead-filter.dto';
@@ -13,6 +14,7 @@ export class LeadsService {
     private prisma: PrismaService,
     private assignment: AssignmentService,
     private notifications: NotificationsGateway,
+    private sse: SseService,
   ) {}
 
   // ── Period ────────────────────────────────────────────────────────────────
@@ -105,6 +107,11 @@ export class LeadsService {
       this.notifications.notifyNewLead(lead);
     } catch {}
 
+    // Notify via SSE (dashboard + leads table auto-update)
+    try {
+      this.sse.emit({ type: 'new_lead', data: lead });
+    } catch {}
+
     return lead;
   }
 
@@ -133,6 +140,7 @@ export class LeadsService {
     });
 
     try { this.notifications.notifyNewLead(lead); } catch {}
+    try { this.sse.emit({ type: 'new_lead', data: lead }); } catch {}
     return lead;
   }
 
@@ -225,23 +233,50 @@ export class LeadsService {
         },
       });
       try { this.notifications.notifyLeadUpdate(lead); } catch {}
+      try { this.sse.emit({ type: 'lead_updated', data: lead }); } catch {}
     }
 
     return lead;
   }
 
   async getDashboardStats() {
-    const today = dayjs().startOf('day').toDate();
+    const todayStart = dayjs().startOf('day').toDate();
+    const yesterdayStart = dayjs().subtract(1, 'day').startOf('day').toDate();
+    const yesterdayEnd = dayjs().subtract(1, 'day').endOf('day').toDate();
 
-    const [newLeads, processed, booked, total] = await Promise.all([
-      this.prisma.lead.count({ where: { status: 'NEW', createdAt: { gte: today } } }),
-      this.prisma.lead.count({ where: { status: { not: 'NEW' }, createdAt: { gte: today } } }),
-      this.prisma.lead.count({ where: { status: 'BOOKED', createdAt: { gte: today } } }),
-      this.prisma.lead.count({ where: { createdAt: { gte: today } } }),
+    const [
+      total,
+      todayCount,
+      yesterdayCount,
+      newLeads,
+      unprocessed,
+      booked,
+    ] = await Promise.all([
+      // All-time total
+      this.prisma.lead.count(),
+      // Today
+      this.prisma.lead.count({ where: { createdAt: { gte: todayStart } } }),
+      // Yesterday
+      this.prisma.lead.count({ where: { createdAt: { gte: yesterdayStart, lte: yesterdayEnd } } }),
+      // New today (status = NEW)
+      this.prisma.lead.count({ where: { status: 'NEW', createdAt: { gte: todayStart } } }),
+      // Unprocessed = NEW regardless of date (not yet touched)
+      this.prisma.lead.count({ where: { status: 'NEW' } }),
+      // Booked today
+      this.prisma.lead.count({ where: { status: 'BOOKED', createdAt: { gte: todayStart } } }),
     ]);
 
-    const conversion = total > 0 ? Math.round((booked / total) * 100) : 0;
-    return { newLeads, processed, booked, total, conversion };
+    const conversion = todayCount > 0 ? Math.round((booked / todayCount) * 100) : 0;
+
+    return {
+      total,
+      today: todayCount,
+      yesterday: yesterdayCount,
+      newLeads,
+      unprocessed,
+      booked,
+      conversion,
+    };
   }
 
   // ── Procedure detection (secondary — never blocks lead creation) ──────────

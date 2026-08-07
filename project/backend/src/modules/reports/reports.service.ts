@@ -5,16 +5,6 @@ import * as path from 'path';
 import * as fs from 'fs';
 import dayjs from 'dayjs';
 
-// ── WhatsApp → Operator mapping ───────────────────────────────────────────────
-// WA1        → Эмиль  (individual report)
-// WA2, WA3, WA4 → Улдай  (combined report)
-const WA_OPERATOR_MAP: Record<string, string> = {
-  WA1: 'Эмиль',
-  WA2: 'Улдай',
-  WA3: 'Улдай',
-  WA4: 'Улдай',
-};
-
 @Injectable()
 export class ReportsService {
   private readonly logger = new Logger(ReportsService.name);
@@ -26,134 +16,77 @@ export class ReportsService {
     }
   }
 
-  // ── Night report: 19:00 – 09:00 (generates at 09:00) ─────────────────────
+  // ── Night report: previous day 19:00 → today 09:00 (runs at 09:00) ───────
   async generateNightReport(date?: Date): Promise<string[]> {
     const reportDate = date || new Date();
     const dateStr = dayjs(reportDate).format('YYYY-MM-DD');
 
-    const from = dayjs(reportDate).subtract(1, 'day').hour(19).minute(0).second(0).toDate();
-    const to   = dayjs(reportDate).hour(9).minute(0).second(0).toDate();
+    const from = dayjs(reportDate).subtract(1, 'day').hour(19).minute(0).second(0).millisecond(0).toDate();
+    const to   = dayjs(reportDate).hour(9).minute(0).second(0).millisecond(0).toDate();
 
     const leads = await this.fetchLeads(from, to);
-    this.logger.log(`Night report: ${leads.length} leads (${dayjs(from).format('HH:mm')} – ${dayjs(to).format('HH:mm')})`);
+    this.logger.log(
+      `Night report: ${leads.length} leads | ${dayjs(from).format('DD.MM HH:mm')} – ${dayjs(to).format('DD.MM HH:mm')}`,
+    );
 
-    const files: string[] = [];
+    const filename = `Night_${dateStr}.xlsx`;
+    const filePath = await this.buildExcel(leads, filename, 'НОЧНОЙ', from, to);
 
-    // Per-operator Excel files
-    const emilLeads = this.filterByWA(leads, ['WA1']);
-    const uldaiLeads = this.filterByWA(leads, ['WA2', 'WA3', 'WA4']);
+    await this.prisma.report.create({
+      data: {
+        type: 'NIGHT',
+        date: reportDate,
+        filePath,
+        data: { count: leads.length, file: filename },
+      },
+    });
 
-    if (emilLeads.length > 0) {
-      const f = await this.buildExcel(emilLeads, `Night_Emil_${dateStr}.xlsx`, 'Эмиль', 'НОЧНОЙ');
-      files.push(f);
-    }
-    if (uldaiLeads.length > 0) {
-      const f = await this.buildExcel(uldaiLeads, `Night_Uldai_${dateStr}.xlsx`, 'Улдай', 'НОЧНОЙ');
-      files.push(f);
-    }
-    // Combined
-    const combined = await this.buildExcel(leads, `Night_All_${dateStr}.xlsx`, 'Все операторы', 'НОЧНОЙ');
-    files.push(combined);
-
-    // Save reports to DB
-    for (const fp of files) {
-      await this.prisma.report.create({
-        data: {
-          type: 'NIGHT',
-          date: reportDate,
-          filePath: fp,
-          data: { count: leads.length, file: path.basename(fp) },
-        },
-      });
-    }
-
-    return files;
+    return [filename];
   }
 
-  // ── Daily report ──────────────────────────────────────────────────────────
+  // ── Daily report: 00:00 → 19:59 (runs at 20:00) ─────────────────────────
   async generateDailyReport(date?: Date): Promise<string[]> {
     const reportDate = date || new Date();
     const dateStr = dayjs(reportDate).format('YYYY-MM-DD');
 
     const from = dayjs(reportDate).startOf('day').toDate();
-    const to   = dayjs(reportDate).endOf('day').toDate();
+    // Period ends at 19:59:59 (before the night period starts at 20:00)
+    const to   = dayjs(reportDate).hour(19).minute(59).second(59).millisecond(999).toDate();
 
     const leads = await this.fetchLeads(from, to);
-    this.logger.log(`Daily report: ${leads.length} leads`);
+    this.logger.log(`Daily report: ${leads.length} leads | ${dayjs(from).format('HH:mm')} – ${dayjs(to).format('HH:mm')}`);
 
-    const files: string[] = [];
+    const filename = `Daily_${dateStr}.xlsx`;
+    const filePath = await this.buildExcel(leads, filename, 'ДНЕВНОЙ', from, to);
 
-    const emilLeads  = this.filterByWA(leads, ['WA1']);
-    const uldaiLeads = this.filterByWA(leads, ['WA2', 'WA3', 'WA4']);
+    await this.prisma.report.create({
+      data: {
+        type: 'DAILY',
+        date: reportDate,
+        filePath,
+        data: { count: leads.length, file: filename },
+      },
+    });
 
-    if (emilLeads.length > 0) {
-      const f = await this.buildExcel(emilLeads, `Daily_Emil_${dateStr}.xlsx`, 'Эмиль', 'ДНЕВНОЙ');
-      files.push(f);
-    }
-    if (uldaiLeads.length > 0) {
-      const f = await this.buildExcel(uldaiLeads, `Daily_Uldai_${dateStr}.xlsx`, 'Улдай', 'ДНЕВНОЙ');
-      files.push(f);
-    }
-    const combined = await this.buildExcel(leads, `Daily_All_${dateStr}.xlsx`, 'Все операторы', 'ДНЕВНОЙ');
-    files.push(combined);
-
-    for (const fp of files) {
-      await this.prisma.report.create({
-        data: {
-          type: 'DAILY',
-          date: reportDate,
-          filePath: fp,
-          data: { count: leads.length, file: path.basename(fp) },
-        },
-      });
-    }
-
-    return files;
+    return [filename];
   }
 
   // ── Fetch leads with all relations ────────────────────────────────────────
   private async fetchLeads(from: Date, to: Date) {
     return this.prisma.lead.findMany({
       where: { createdAt: { gte: from, lte: to } },
-      include: {
-        client: true,
-        operator: true,
-        procedure: true,
-      },
+      include: { client: true, operator: true, procedure: true },
       orderBy: { createdAt: 'asc' },
     });
   }
 
-  // ── Filter leads by WhatsApp instance source ──────────────────────────────
-  // We use the whatsapp account linked via message history
-  private filterByWA(leads: any[], waNames: string[]): any[] {
-    // We tag leads by their operator name matching WA mapping
-    // Since WA1=Эмиль means leads that came through WA1
-    // Check via operator name OR just split by assignment order
-    // In this system we track instanceName in messages table
-    // Simple approach: split by whether lead's assigned operator matches mapping
-    // For now return all leads tagged to those WA accounts via source lookup
-    return leads.filter((lead) => {
-      const opName = lead.operator?.name || '';
-      const assignedWA = Object.entries(WA_OPERATOR_MAP)
-        .filter(([, op]) => op === (waNames.includes('WA1') && waNames.length === 1 ? 'Эмиль' : 'Улдай'))
-        .map(([wa]) => wa);
-      // Simple: if filtering for Emil, return leads assigned to Эмиль operator
-      // If filtering for Uldai, return the rest
-      if (waNames.includes('WA1') && waNames.length === 1) {
-        return opName === 'Эмиль';
-      }
-      // Uldai = everyone except Emil
-      return opName !== 'Эмиль';
-    });
-  }
-
-  // ── Build Excel file ───────────────────────────────────────────────────────
+  // ── Build Excel file ──────────────────────────────────────────────────────
   private async buildExcel(
     leads: any[],
     filename: string,
-    operatorLabel: string,
-    reportType: string,
+    reportType: 'НОЧНОЙ' | 'ДНЕВНОЙ',
+    from: Date,
+    to: Date,
   ): Promise<string> {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Call Center System';
@@ -163,58 +96,60 @@ export class ReportsService {
       pageSetup: { fitToPage: true, orientation: 'landscape' },
     });
 
-    // Title row
-    sheet.mergeCells('A1:J1');
+    const dateLabel = dayjs(to).format('DD.MM.YYYY');
+    const periodLabel = `${dayjs(from).format('DD.MM HH:mm')} – ${dayjs(to).format('DD.MM HH:mm')}`;
+
+    // ── Row 1: Main title ──────────────────────────────────────────────────
+    const COLS = 9; // A–I
+    sheet.mergeCells(`A1:I1`);
     const titleCell = sheet.getCell('A1');
-    titleCell.value = `${reportType} ОТЧЁТ — ${operatorLabel} — ${dayjs().format('DD.MM.YYYY')}`;
-    titleCell.font = { size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
+    titleCell.value = `Отчёт по лидам`;
+    titleCell.font = { size: 16, bold: true, color: { argb: 'FFFFFFFF' } };
     titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
     titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
-    sheet.getRow(1).height = 30;
+    sheet.getRow(1).height = 32;
 
-    // Summary row
-    sheet.mergeCells('A2:J2');
-    const summaryCell = sheet.getCell('A2');
-    summaryCell.value = `Всего лидов: ${leads.length}  |  Записались (BOOKED): ${leads.filter(l => l.status === 'BOOKED').length}  |  Без процедуры: ${leads.filter(l => !l.procedureId).length}`;
-    summaryCell.font = { bold: true, size: 11 };
-    summaryCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } };
-    summaryCell.alignment = { horizontal: 'center' };
-    sheet.getRow(2).height = 22;
+    // ── Row 2: Meta info ───────────────────────────────────────────────────
+    sheet.mergeCells('A2:I2');
+    const metaCell = sheet.getCell('A2');
+    metaCell.value = `${reportType === 'НОЧНОЙ' ? '🌙 Ночной' : '☀️ Дневной'} отчёт  |  Дата: ${dateLabel}  |  Период: ${periodLabel}  |  Всего лидов: ${leads.length}`;
+    metaCell.font = { bold: true, size: 10 };
+    metaCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } };
+    metaCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    sheet.getRow(2).height = 20;
 
-    // Column definitions
+    // ── Row 3: Column headers ──────────────────────────────────────────────
     sheet.columns = [
       { key: 'num',       width: 5  },
-      { key: 'date',      width: 12 },
-      { key: 'time',      width: 8  },
+      { key: 'time',      width: 14 },
       { key: 'phone',     width: 18 },
-      { key: 'name',      width: 20 },
-      { key: 'procedure', width: 32 },
-      { key: 'price',     width: 12 },
-      { key: 'source',    width: 12 },
-      { key: 'operator',  width: 16 },
+      { key: 'name',      width: 22 },
+      { key: 'procedure', width: 34 },
+      { key: 'price',     width: 13 },
+      { key: 'operator',  width: 18 },
       { key: 'status',    width: 14 },
+      { key: 'source',    width: 12 },
     ];
 
-    // Header row (row 3)
+    const HEADERS = ['#', 'Время', 'Телефон', 'Имя', 'Процедура', 'Цена (₸)', 'Оператор', 'Статус', 'Источник'];
     const headerRow = sheet.getRow(3);
-    const headers = ['#', 'Дата', 'Время', 'Телефон', 'Имя', 'Процедура', 'Цена (₸)', 'Источник', 'Оператор', 'Статус'];
-    headers.forEach((h, i) => {
+    HEADERS.forEach((h, i) => {
       const cell = headerRow.getCell(i + 1);
       cell.value = h;
-      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
       cell.border = {
-        top: { style: 'thin', color: { argb: 'FF1E40AF' } },
+        top:    { style: 'thin', color: { argb: 'FF1E40AF' } },
         bottom: { style: 'thin', color: { argb: 'FF1E40AF' } },
-        left: { style: 'thin', color: { argb: 'FF1E40AF' } },
-        right: { style: 'thin', color: { argb: 'FF1E40AF' } },
+        left:   { style: 'thin', color: { argb: 'FF1E40AF' } },
+        right:  { style: 'thin', color: { argb: 'FF1E40AF' } },
       };
     });
     headerRow.height = 22;
 
-    // Status colors
-    const statusColors: Record<string, string> = {
+    // ── Status → background colour map ────────────────────────────────────
+    const STATUS_COLORS: Record<string, string> = {
       NEW:       'FFDBEAFE',
       CALLING:   'FFFEF9C3',
       BOOKED:    'FFD1FAE5',
@@ -223,24 +158,24 @@ export class ReportsService {
       CLOSED:    'FFFEE2E2',
     };
 
-    // Data rows starting at row 4
+    // ── Data rows (start at row 4) ─────────────────────────────────────────
     leads.forEach((lead, idx) => {
-      const rowNum = idx + 4;
-      const row = sheet.getRow(rowNum);
-      const isEven = idx % 2 === 0;
-      const rowBg = isEven ? 'FFFAFAFA' : 'FFFFFFFF';
+      const row = sheet.getRow(idx + 4);
+      const rowBg = idx % 2 === 0 ? 'FFFAFAFA' : 'FFFFFFFF';
 
-      const values = [
+      const rawPrice = lead.price ?? lead.procedure?.price;
+      const priceDisplay = rawPrice != null ? Number(rawPrice).toLocaleString('ru-RU') : '';
+
+      const values: any[] = [
         idx + 1,
-        dayjs(lead.createdAt).format('DD.MM.YYYY'),
-        dayjs(lead.createdAt).format('HH:mm'),
+        dayjs(lead.createdAt).format('DD.MM.YYYY HH:mm'),
         lead.client?.phone || '',
         lead.client?.name || '',
         lead.procedure?.name || '— не определена —',
-        lead.price ?? lead.procedure?.price ?? '',
-        lead.source || 'WHATSAPP',
+        priceDisplay,
         lead.operator?.name || '—',
         lead.status || 'NEW',
+        lead.source || 'WHATSAPP',
       ];
 
       values.forEach((val, i) => {
@@ -248,18 +183,17 @@ export class ReportsService {
         cell.value = val;
         cell.alignment = { vertical: 'middle', horizontal: i === 0 ? 'center' : 'left' };
 
-        // Status column coloring
-        if (i === 9) {
-          const statusBg = statusColors[String(val)] || rowBg;
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: statusBg } };
+        // Status column (index 7)
+        if (i === 7) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: STATUS_COLORS[String(val)] || rowBg } };
           cell.font = { bold: true, size: 9 };
           cell.alignment = { horizontal: 'center', vertical: 'middle' };
         } else {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBg } };
         }
 
-        // No procedure = orange background
-        if (i === 5 && !lead.procedureId) {
+        // Procedure column (index 4): highlight missing procedure in yellow
+        if (i === 4 && !lead.procedureId) {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } };
           cell.font = { italic: true, color: { argb: 'FF92400E' } };
         }
@@ -275,7 +209,17 @@ export class ReportsService {
       row.height = 18;
     });
 
-    // Freeze header rows
+    // ── Summary footer ─────────────────────────────────────────────────────
+    const footerRowNum = leads.length + 4;
+    sheet.mergeCells(`A${footerRowNum}:I${footerRowNum}`);
+    const footerCell = sheet.getCell(`A${footerRowNum}`);
+    footerCell.value = `Итого лидов: ${leads.length}   |   Записались (BOOKED): ${leads.filter(l => l.status === 'BOOKED').length}   |   Без процедуры: ${leads.filter(l => !l.procedureId).length}`;
+    footerCell.font = { bold: true, size: 10 };
+    footerCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } };
+    footerCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    sheet.getRow(footerRowNum).height = 20;
+
+    // Freeze top 3 rows
     sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: 3 }];
 
     const filePath = path.join(this.reportsDir, filename);

@@ -36,35 +36,61 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── Evolution API ─────────────────────────────────────────────────────────────
+  # ── Evolution API v1.8.x — uses @s.whatsapp.net (no @lid) ────────────────────
   evolution-api:
-    image: atendai/evolution-api:latest
+    image: atendai/evolution-api:v1.8.2
     container_name: cc_evolution
     restart: unless-stopped
     ports:
       - '8080:8080'
     environment:
-      - SERVER_URL=http://localhost:8080
+      - SERVER_URL=http://188.241.217.76:8080
       - AUTHENTICATION_TYPE=apikey
-      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:-my-secret-evo-key-2026}
+      - AUTHENTICATION_API_KEY=429683C4C977415CAAFCCE10F7D57E11
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
-      - DATABASE_CONNECTION_URI=${DATABASE_URL:-postgresql://callcenter:callcenter123@postgres:5432/callcenter}
+      - DATABASE_CONNECTION_URI=postgresql://evolution:evolution_pass@cc_evo_postgres:5432/evolution_db
       - DATABASE_CONNECTION_CLIENT_NAME=evolution_api
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_CHATS=true
       - REDIS_ENABLED=true
-      - REDIS_URI=redis://redis:6379
+      - REDIS_URI=redis://cc_redis:6379
       - LOG_LEVEL=ERROR
       - DEL_INSTANCE=false
       - QRCODE_LIMIT=30
+      # Webhook events
+      - WEBHOOK_GLOBAL_URL=http://cc_backend:3001/api/webhook/evolution
+      - WEBHOOK_GLOBAL_ENABLED=true
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
       - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
+      - WEBHOOK_EVENTS_CONTACTS_UPSERT=true
+      - WEBHOOK_EVENTS_CONTACTS_UPDATE=true
+      - WEBHOOK_EVENTS_QRCODE_UPDATED=true
     volumes:
       - evolution_data:/evolution/instances
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - cc_evo_postgres
+      - cc_redis
+
+  # ── Separate PostgreSQL for Evolution ─────────────────────────────────────────
+  cc_evo_postgres:
+    image: postgres:16-alpine
+    container_name: cc_evo_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: evolution_db
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution_pass
+    volumes:
+      - evo_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U evolution']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # ── Backend (NestJS) ──────────────────────────────────────────────────────────
   backend:
@@ -113,4 +139,5 @@ volumes:
   postgres_data:
   redis_data:
   evolution_data:
+  evo_postgres_data:
   backend_reports:

@@ -8,6 +8,7 @@ import { leadsApi } from '../api/leads';
 import { operatorsApi } from '../api/operators';
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
+import { useSse } from '../hooks/useSse';
 
 const STATUSES = ['', 'NEW', 'CALLING', 'BOOKED', 'FOLLOW_UP', 'NO_ANSWER', 'CLOSED'];
 const PAGE_SIZE = 20;
@@ -39,6 +40,21 @@ export default function LeadsPage() {
   const { data: operators } = useQuery({
     queryKey: ['operators'],
     queryFn: operatorsApi.getAll,
+  });
+
+  // Real-time: when a new lead arrives via SSE, invalidate the leads list
+  // so the table refreshes automatically (only when on page 0 with no filters)
+  useSse({
+    onNewLead: () => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      // Small toast so the operator knows something arrived
+      if (page === 0 && !search && !status) {
+        toast('📱 Новый лид', { duration: 2500 });
+      }
+    },
+    onLeadUpdated: () => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
   });
 
   const assignMutation = useMutation({
