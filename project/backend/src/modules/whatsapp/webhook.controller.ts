@@ -1,5 +1,6 @@
 import { Controller, Post, Body, Logger, HttpCode } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { OnModuleInit } from '@nestjs/common';
 import { LeadsService } from '../leads/leads.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import axios from 'axios';
@@ -7,15 +8,15 @@ import { ConfigService } from '@nestjs/config';
 
 @ApiTags('webhook')
 @Controller('webhook')
-export class WebhookController {
+export class WebhookController implements OnModuleInit {
   private readonly logger = new Logger(WebhookController.name);
 
-  // Our own WhatsApp numbers — never create leads from these
-  private readonly OWN_NUMBERS = new Set([
-    '77085995047', // WA1
-    '77083274500', // WA2
-    '77058716017', // WA3
-    '77085991789', // WA4
+  // Our own WhatsApp numbers — loaded from DB on startup
+  private OWN_NUMBERS: Set<string> = new Set([
+    '77085995047', // WA1 fallback
+    '77083274500', // WA2 fallback
+    '77058716017', // WA3 fallback
+    '77085991789', // WA4 fallback
   ]);
 
   private evoBaseUrl: string;
@@ -28,26 +29,28 @@ export class WebhookController {
   ) {
     this.evoBaseUrl = this.config.get('EVOLUTION_API_URL', 'http://localhost:8080');
     this.evoApiKey  = this.config.get('EVOLUTION_API_KEY', '');
+  }
 
-    // Load own numbers from DB dynamically on first message
-    this.loadOwnNumbers();
+  // Called after module init — load own numbers from DB
+  async onModuleInit() {
+    await this.loadOwnNumbers();
   }
 
   private async loadOwnNumbers() {
     try {
       const accounts = await this.prisma.whatsAppAccount.findMany({
-        where: { phone: { not: null }, status: 'ONLINE' },
+        where: { phone: { not: null } },
         select: { phone: true },
       });
       for (const acc of accounts) {
         if (acc.phone) {
-          const clean = acc.phone.replace('+','').replace(/\s/g,'');
+          const clean = acc.phone.replace('+', '').replace(/\s/g, '');
           this.OWN_NUMBERS.add(clean);
         }
       }
-      this.logger.log(`Own numbers loaded: ${[...this.OWN_NUMBERS].join(', ')}`);
-    } catch {
-      // fallback to hardcoded
+      this.logger.log(`Own numbers: ${[...this.OWN_NUMBERS].join(', ')}`);
+    } catch (e) {
+      this.logger.warn('Could not load own numbers from DB, using fallback');
     }
   }
 
