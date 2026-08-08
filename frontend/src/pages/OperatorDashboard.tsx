@@ -25,7 +25,7 @@ export default function OperatorDashboard() {
   const loadLeads = async () => {
     try {
       const { data } = await leadsApi.getAll({ operatorId: user?.operator?.id });
-      setLeads(data);
+      setLeads(data.data || data);
     } catch (error) {
       console.error('Error loading leads:', error);
     } finally {

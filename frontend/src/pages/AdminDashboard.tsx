@@ -30,7 +30,7 @@ export default function AdminDashboard() {
         operatorsApi.getAll(),
         dashboardApi.getStats(),
       ]);
-      setLeads(leadsRes.data);
+      setLeads(leadsRes.data.data || leadsRes.data);
       setOperators(operatorsRes.data);
       setStats(statsRes.data);
     } catch (error) {
