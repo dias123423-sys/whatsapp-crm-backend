@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { leadsApi, operatorsApi, dashboardApi } from '@/lib/api';
 import { useAuth, useLeads } from '@/lib/store';
 import { formatDate, formatPhone, leadStatusColors, leadStatusLabels } from '@/lib/utils';
-import { Users, LogOut, UserPlus, Smartphone } from 'lucide-react';
+import { Users, LogOut, UserPlus, Smartphone, Package, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { Lead, Operator, DashboardStats } from '@/types';
 
@@ -80,7 +80,15 @@ export default function AdminDashboard() {
               </Button>
               <Button variant="outline" onClick={() => navigate('/leads')}>
                 <Users className="w-4 h-4 mr-2" />
-                Все лиды
+                Лиды
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/procedures')}>
+                <Package className="w-4 h-4 mr-2" />
+                Процедуры
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/reports')}>
+                <TrendingUp className="w-4 h-4 mr-2" />
+                Отчёты
               </Button>
               <Button variant="outline" onClick={logout}>
                 <LogOut className="w-4 h-4 mr-2" />

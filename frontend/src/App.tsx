@@ -3,12 +3,16 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './lib/store';
 import { authApi } from './lib/api';
 import { socketClient } from './lib/socket';
+import Notifications from './components/Notifications';
 import Login from './pages/Login';
 import AdminDashboard from './pages/AdminDashboard';
 import OperatorDashboard from './pages/OperatorDashboard';
 import WhatsAppQR from './pages/WhatsAppQR';
 import WhatsAppManagement from './pages/WhatsAppManagement';
 import LeadsManagement from './pages/LeadsManagement';
+import LeadDetails from './pages/LeadDetails';
+import ProceduresManagement from './pages/ProceduresManagement';
+import ReportsPage from './pages/ReportsPage';
 
 function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode; allowedRoles: string[] }) {
   const { user, token } = useAuth();
@@ -54,6 +58,7 @@ function App() {
 
   return (
     <BrowserRouter>
+      <Notifications />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route
@@ -93,6 +98,30 @@ function App() {
           element={
             <ProtectedRoute allowedRoles={['ADMIN']}>
               <LeadsManagement />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/leads/:id"
+          element={
+            <ProtectedRoute allowedRoles={['ADMIN', 'OPERATOR']}>
+              <LeadDetails />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/procedures"
+          element={
+            <ProtectedRoute allowedRoles={['ADMIN']}>
+              <ProceduresManagement />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/reports"
+          element={
+            <ProtectedRoute allowedRoles={['ADMIN']}>
+              <ReportsPage />
             </ProtectedRoute>
           }
         />
