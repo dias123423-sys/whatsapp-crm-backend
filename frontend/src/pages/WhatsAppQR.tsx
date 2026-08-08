@@ -7,7 +7,7 @@ import { ArrowLeft, Smartphone, CheckCircle, XCircle, RefreshCw } from 'lucide-r
 import { useNavigate } from 'react-router-dom';
 
 const EVOLUTION_API_URL = 'https://188-241-217-76.nip.io/evolution';
-const EVOLUTION_API_KEY = 'B6D711FCDE4D4FD5936544120E713976';
+const EVOLUTION_API_KEY = 'evolution-key-2026';
 const INSTANCE_NAME = 'callcenter-main';
 
 interface ConnectionStatus {
