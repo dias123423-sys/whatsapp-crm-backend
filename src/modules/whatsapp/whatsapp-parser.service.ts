@@ -68,7 +68,7 @@ export class WhatsAppParserService {
     // ─────────────────────────────────────────────────
     // STEP 2: Save Message (idempotent by messageId)
     // ─────────────────────────────────────────────────
-    await this.prisma.message.upsert({
+    const _msgSaved = await this.prisma.message.upsert({
       where: { messageId },
       update: {},
       create: {
@@ -83,6 +83,47 @@ export class WhatsAppParserService {
         },
       },
     });
+
+    // ─────────────────────────────────────────────────
+    // STEP 2.5: Check for existing ACTIVE lead for this client
+    // ПРАВИЛО: один активный лид на клиента — не создавать дубликаты
+    // Активные статусы: NEW, ASSIGNED, CALLING, FOLLOW_UP
+    // ─────────────────────────────────────────────────
+    const existingActiveLead = await this.prisma.lead.findFirst({
+      where: {
+        clientId: client.id,
+        status: { in: ['NEW', 'ASSIGNED', 'CALLING', 'FOLLOW_UP'] },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (existingActiveLead) {
+      this.logger.log(
+        `♻️  Client ${phone} already has active lead ${existingActiveLead.id} (${existingActiveLead.status}) — skipping new lead creation`,
+      );
+
+      // Обновляем originalMessage если новое сообщение содержит процедуру/цену
+      const offerMatch = await this.matchOffer(messageText, this.extractPrice(messageText)?.price);
+
+      if (offerMatch && (!existingActiveLead.parsedPrice || existingActiveLead.parsedProcedures?.length === 0)) {
+        await this.prisma.lead.update({
+          where: { id: existingActiveLead.id },
+          data: {
+            parsedProcedures: offerMatch.procedures,
+            parsedPrice: offerMatch.price,
+            parsedCurrency: 'KZT',
+            offerId: offerMatch.offerId,
+            // Дополняем originalMessage
+            originalMessage: existingActiveLead.originalMessage
+              ? `${existingActiveLead.originalMessage}\n---\n${messageText}`
+              : messageText,
+          },
+        });
+        this.logger.log(`✅ Updated existing lead ${existingActiveLead.id} with procedure: ${offerMatch.offerName}`);
+      }
+
+      return null; // Не создаём дубликат
+    }
 
     // ─────────────────────────────────────────────────
     // STEP 3: Parse Price (deterministic, no AI)
@@ -110,7 +151,7 @@ export class WhatsAppParserService {
         originalMessage: messageText || '',
         parsedProcedures: offerMatch?.procedures ?? [],
         parsedPrice: offerMatch?.price ?? priceResult?.price ?? null,
-        parsedCurrency: '₸',
+        parsedCurrency: 'KZT',
         offerId: offerMatch?.offerId ?? undefined,
         status: 'NEW',          // Admin назначает оператора вручную
         source: 'WHATSAPP',
