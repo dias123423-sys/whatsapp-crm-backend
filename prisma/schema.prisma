@@ -1,0 +1,355 @@
+// Prisma Schema для WhatsApp Lead CRM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// AUTHENTICATION & USERS
+// ============================================
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  phone     String?
+  role      Role     @default(OPERATOR)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  operator  Operator?
+  auditLogs AuditLog[]
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  OPERATOR
+  MANAGER
+}
+
+// ============================================
+// OPERATORS
+// ============================================
+
+model Operator {
+  id           String   @id @default(uuid())
+  userId       String   @unique
+  currentLeads Int      @default(0) // Текущее количество активных лидов
+  totalLeads   Int      @default(0) // Всего обработано лидов
+  totalCalls   Int      @default(0) // Всего звонков
+  totalBooked  Int      @default(0) // Всего записей
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leads Lead[]
+
+  @@index([userId])
+  @@index([active])
+  @@map("operators")
+}
+
+// ============================================
+// CLIENTS
+// ============================================
+
+model Client {
+  id             String   @id @default(uuid())
+  phone          String   @unique // Оригинальный номер телефона
+  normalizedPhone String  @unique // Нормализованный номер для поиска (+77771234567)
+  whatsappName   String? // Имя из WhatsApp
+  name           String? // Настоящее имя (может быть заполнено оператором)
+  email          String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  leads        Lead[]
+  messages     Message[]
+  appointments Appointment[]
+
+  @@index([phone])
+  @@index([normalizedPhone])
+  @@map("clients")
+}
+
+// ============================================
+// LEADS
+// ============================================
+
+model Lead {
+  id                String     @id @default(uuid())
+  clientId          String
+  operatorId        String?
+  procedureId       String?
+  offerId           String? // Связь с конкретным оффером
+  originalMessage   String     @db.Text // Полное исходное сообщение
+  parsedProcedures  String[] // ["Подтяжка лица", "Чистка лица"]
+  parsedPrice       Int? // Распознанная цена
+  parsedCurrency    String     @default("KZT")
+  status            LeadStatus @default(NEW)
+  source            String     @default("WHATSAPP") // Instagram, Facebook, WhatsApp Direct
+  campaign          String? // Название кампании
+  adId              String? // ID рекламы
+  whatsappAccountId String? // Из какого WhatsApp аккаунта
+  whatsappOwnerId   String? // КРИТИЧЕСКИ ВАЖНО: Владелец WhatsApp на момент получения лида (историческая запись)
+  priority          Int        @default(0)
+  notes             String?    @db.Text
+  period            Period? // DAY или NIGHT
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  assignedAt        DateTime? // Когда назначен оператору
+  completedAt       DateTime? // Когда закрыт
+
+  // Relations
+  client          Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  operator        Operator?       @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+  procedure       Procedure?      @relation(fields: [procedureId], references: [id], onDelete: SetNull)
+  offer           Offer?          @relation(fields: [offerId], references: [id], onDelete: SetNull)
+  whatsappAccount WhatsAppAccount? @relation(fields: [whatsappAccountId], references: [id], onDelete: SetNull)
+  whatsappOwner   WhatsAppOwner?  @relation(fields: [whatsappOwnerId], references: [id], onDelete: SetNull)
+  appointments    Appointment[]
+
+  @@index([clientId])
+  @@index([operatorId])
+  @@index([offerId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([period])
+  @@index([whatsappAccountId])
+  @@index([whatsappOwnerId])
+  @@index([adId])
+  @@index([campaign])
+  @@map("leads")
+}
+
+enum LeadStatus {
+  NEW // Новый лид
+  ASSIGNED // Назначен оператору
+  CALLING // Оператор звонит
+  BOOKED // Записан на процедуру
+  FOLLOW_UP // Требуется повторный звонок
+  NO_ANSWER // Не отвечает
+  CLOSED // Закрыт (отказ или завершен)
+}
+
+enum Period {
+  DAY // 00:00 - 18:59
+  NIGHT // 19:00 - 08:59
+}
+
+// ============================================
+// PROCEDURES (Процедуры / Услуги)
+// ============================================
+
+model Procedure {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  nameKz      String? // Название на казахском
+  price       Int // Базовая цена в тенге
+  keywords    String[] // Массив ключевых слов для определения
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  leads Lead[]
+  offers Offer[] // Один процедура может иметь много офферов с разными ценами
+
+  @@index([name])
+  @@index([active])
+  @@map("procedures")
+}
+
+// ============================================
+// OFFERS (Рекламные офферы с разными ценами)
+// ============================================
+
+model Offer {
+  id           String     @id @default(uuid())
+  name         String     // "Подтяжка лица + Чистка лица"
+  price        Int        // 3990 или 5000 — всегда тенге
+  currency     String     @default("KZT")
+  procedureId  String?
+  procedure    Procedure? @relation(fields: [procedureId], references: [id])
+  keywords     String[]   // ["подтяжка", "чистка", "лица", "3990"]
+  category     String?    // "мужчины", "женщины", null
+  campaign     String?    // "Instagram Stories", "Facebook Feed"
+  adId         String?    // ID рекламного объявления
+  description  String?    // Полное описание оффера
+  active       Boolean    @default(true)
+  leads        Lead[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([name])
+  @@index([price])
+  @@index([active])
+  @@index([campaign])
+  @@map("offers")
+}
+
+// ============================================
+// MESSAGES (История сообщений WhatsApp)
+// ============================================
+
+model Message {
+  id        String           @id @default(uuid())
+  clientId  String
+  messageId String           @unique // КРИТИЧЕСКИ ВАЖНО: Уникальный ID сообщения из Evolution API для защиты от дубликатов
+  message   String
+  direction MessageDirection
+  metadata  Json? // Дополнительные данные от Evolution API
+  createdAt DateTime         @default(now())
+
+  // Relations
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([createdAt])
+  @@index([messageId])
+  @@map("messages")
+}
+
+enum MessageDirection {
+  INCOMING // От клиента
+  OUTGOING // Отправлено клиенту
+}
+
+// ============================================
+// APPOINTMENTS (Записи на процедуры)
+// ============================================
+
+model Appointment {
+  id         String            @id @default(uuid())
+  leadId     String
+  clientId   String
+  date       DateTime // Дата записи
+  time       String // Время (например "14:00")
+  doctor     String? // Имя врача
+  branch     String? // Филиал
+  status     AppointmentStatus @default(SCHEDULED)
+  notes      String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  // Relations
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([clientId])
+  @@index([date])
+  @@map("appointments")
+}
+
+enum AppointmentStatus {
+  SCHEDULED // Запланировано
+  CONFIRMED // Подтверждено
+  COMPLETED // Завершено
+  CANCELLED // Отменено
+  NO_SHOW // Не пришел
+}
+
+// ============================================
+// WHATSAPP OWNERS (Владельцы WhatsApp)
+// ============================================
+
+model WhatsAppOwner {
+  id        String   @id @default(uuid())
+  name      String   @unique // Танат, Улдай, и т.д.
+  phone     String? // Телефон владельца (необязательно)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  whatsappAccounts WhatsAppAccount[] // Один владелец может иметь несколько WhatsApp
+  leads            Lead[] // История лидов (для отчётов)
+
+  @@index([name])
+  @@index([active])
+  @@map("whatsapp_owners")
+}
+
+// ============================================
+// WHATSAPP ACCOUNTS (Подключенные WhatsApp)
+// ============================================
+
+model WhatsAppAccount {
+  id                   String   @id @default(uuid())
+  instanceName         String   @unique // whatsapp_1_tanat, whatsapp_2, whatsapp_3_ulday, whatsapp_4
+  evolutionInstanceId  String? // ID instance из Evolution API
+  phone                String?
+  name                 String? // Отображаемое название (WhatsApp 1, WhatsApp 2, и т.д.)
+  ownerId              String? // КРИТИЧЕСКИ ВАЖНО: Текущий владелец WhatsApp
+  status               String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED
+  qrCode               String?
+  metadata             Json? // Дополнительные данные
+  active               Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  // Relations
+  owner WhatsAppOwner? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  leads Lead[] // Лиды из этого WhatsApp
+
+  @@index([instanceName])
+  @@index([status])
+  @@index([ownerId])
+  @@map("whatsapp_accounts")
+}
+
+// ============================================
+// AUDIT LOGS (Аудит действий)
+// ============================================
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  action    String // LOGIN, LOGOUT, CREATE_LEAD, UPDATE_LEAD, etc.
+  entity    String? // LEAD, CLIENT, OPERATOR, etc.
+  entityId  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================
+// SETTINGS (Настройки системы)
+// ============================================
+
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  type      String   @default("STRING") // STRING, NUMBER, BOOLEAN, JSON
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([key])
+  @@map("settings")
+}
