@@ -46,14 +46,30 @@ export class WhatsAppService {
       accounts.map(async (account) => {
         try {
           const evStatus = await this.getInstanceStatus(account.instanceName);
-          // Обновляем статус в БД если изменился
+          const updates: any = {};
+
           if (evStatus.state !== account.status) {
+            updates.status = evStatus.state;
+          }
+
+          // Сохраняем phone если есть из Evolution и в БД нет
+          if (evStatus.phone && !account.phone) {
+            const digits = evStatus.phone.replace(/\D/g, '');
+            updates.phone = '+' + digits;
+          }
+
+          if (Object.keys(updates).length > 0) {
             await this.prisma.whatsAppAccount.update({
               where: { id: account.id },
-              data: { status: evStatus.state },
+              data: updates,
             });
           }
-          return { ...account, status: evStatus.state, phone: evStatus.phone ?? account.phone };
+
+          return {
+            ...account,
+            status: evStatus.state,
+            phone: updates.phone ?? account.phone ?? evStatus.phone ?? null,
+          };
         } catch {
           return account;
         }
@@ -91,29 +107,63 @@ export class WhatsAppService {
   }
 
   /**
-   * Получить статус instance из Evolution API
+   * Получить статус и номер телефона instance из Evolution API
+   * Используем fetchInstances — он возвращает ownerJid с реальным номером
    */
   async getInstanceStatus(instanceName: string): Promise<{ state: string; phone: string | null }> {
     try {
-      const response = await firstValueFrom(
+      // 1. Состояние подключения
+      const stateResp = await firstValueFrom(
         this.httpService.get(
           `${this.evolutionApiUrl}/instance/connectionState/${instanceName}`,
           { headers: this.headers },
         ),
-      );
+      ).catch(() => null);
 
-      // Evolution API v2 returns { instance: { instanceName, state } }
-      const state = response.data?.instance?.state || response.data?.state || 'close';
-      const phone = response.data?.instance?.ownerJid?.replace('@s.whatsapp.net', '')
-        || response.data?.phone
-        || response.data?.number
-        || null;
-      return {
-        state: this.mapEvolutionStatus(state),
-        phone: phone ? `+${phone.replace('+', '')}` : null,
-      };
+      const rawState: string =
+        stateResp?.data?.instance?.state ||
+        stateResp?.data?.state ||
+        'close';
+
+      // 2. Данные instance — fetchInstances возвращает ownerJid
+      let phone: string | null = null;
+      try {
+        const instResp = await firstValueFrom(
+          this.httpService.get(
+            `${this.evolutionApiUrl}/instance/fetchInstances?instanceName=${instanceName}`,
+            { headers: this.headers },
+          ),
+        );
+
+        // Ответ — массив или объект
+        const instances = instResp.data;
+        const inst = Array.isArray(instances)
+          ? instances.find((i: any) =>
+              i.name === instanceName || i.instanceName === instanceName,
+            )
+          : instances;
+
+        // ownerJid: "77001234567@s.whatsapp.net"
+        const ownerJid: string =
+          inst?.ownerJid || inst?.number || inst?.phone || '';
+
+        if (ownerJid) {
+          const digits = ownerJid.split('@')[0].replace(/\D/g, '');
+          if (digits.length >= 10) {
+            // Kazakhstan: 8xxx → 7xxx
+            const normalized = digits.startsWith('8') && digits.length === 11
+              ? '7' + digits.slice(1)
+              : digits;
+            phone = '+' + normalized;
+          }
+        }
+      } catch {
+        // Не критично — телефон просто не обновится
+      }
+
+      return { state: this.mapEvolutionStatus(rawState), phone };
     } catch (error) {
-      this.logger.warn(`Failed to get status for ${instanceName}: ${error.message}`);
+      this.logger.warn(`getInstanceStatus failed for ${instanceName}: ${error.message}`);
       return { state: 'DISCONNECTED', phone: null };
     }
   }
@@ -195,14 +245,25 @@ export class WhatsAppService {
   /**
    * Обновить статус аккаунта (вызывается из webhook)
    */
-  async updateAccountStatus(instanceName: string, status: string) {
+  async updateAccountStatus(instanceName: string, status: string, phone?: string | null) {
     const mapped = this.mapEvolutionStatus(status);
+
+    const updateData: any = { status: mapped, updatedAt: new Date() };
+
+    // Сохраняем номер телефона если пришёл из ownerJid
+    if (phone && phone.length > 5) {
+      const normalized = phone.replace(/\D/g, '');
+      updateData.phone = '+' + normalized;
+      this.logger.log(`📱 Phone saved for ${instanceName}: +${normalized}`);
+    }
+
     await this.prisma.whatsAppAccount.upsert({
       where: { instanceName },
-      update: { status: mapped, updatedAt: new Date() },
+      update: updateData,
       create: {
         instanceName,
         status: mapped,
+        phone: updateData.phone ?? null,
         active: true,
       },
     });

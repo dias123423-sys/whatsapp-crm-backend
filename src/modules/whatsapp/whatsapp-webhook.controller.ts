@@ -230,7 +230,12 @@ export class WhatsAppWebhookController {
 
     this.logger.log(`🔌 Connection: instance=${instanceName} state=${state}`);
 
-    await this.whatsappService.updateAccountStatus(instanceName, state);
+    // Извлекаем номер телефона из ownerJid при подключении
+    // ownerJid format: "77001234567@s.whatsapp.net"
+    const ownerJid: string = data?.ownerJid || data?.number || '';
+    const phone = ownerJid ? ownerJid.split('@')[0] : null;
+
+    await this.whatsappService.updateAccountStatus(instanceName, state, phone);
 
     const account = await this.whatsappService.getAccountByInstanceName(instanceName);
     if (account) {
