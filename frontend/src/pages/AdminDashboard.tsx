@@ -73,11 +73,14 @@ export default function AdminDashboard() {
                 <h1 className="text-xl font-bold">Админ Панель</h1>
                 <p className="text-sm text-gray-500">{user?.name}</p>
               </div>
-            </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => navigate('/whatsapp-qr')}>
+              <Button variant="outline" onClick={() => navigate('/whatsapp')}>
                 <Smartphone className="w-4 h-4 mr-2" />
-                WhatsApp QR
+                WhatsApp
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/leads')}>
+                <Users className="w-4 h-4 mr-2" />
+                Все лиды
               </Button>
               <Button variant="outline" onClick={logout}>
                 <LogOut className="w-4 h-4 mr-2" />
