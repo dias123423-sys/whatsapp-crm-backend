@@ -5,10 +5,12 @@ import { Badge } from '@/components/ui/badge';
 import { leadsApi, operatorsApi, dashboardApi } from '@/lib/api';
 import { useAuth, useLeads } from '@/lib/store';
 import { formatDate, formatPhone, leadStatusColors, leadStatusLabels } from '@/lib/utils';
-import { Users, LogOut, UserPlus } from 'lucide-react';
+import { Users, LogOut, UserPlus, Smartphone } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import type { Lead, Operator, DashboardStats } from '@/types';
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
   const user = useAuth((state) => state.user);
   const logout = useAuth((state) => state.logout);
   const { leads, setLeads } = useLeads();
@@ -72,10 +74,16 @@ export default function AdminDashboard() {
                 <p className="text-sm text-gray-500">{user?.name}</p>
               </div>
             </div>
-            <Button variant="outline" onClick={logout}>
-              <LogOut className="w-4 h-4 mr-2" />
-              Выйти
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => navigate('/whatsapp-qr')}>
+                <Smartphone className="w-4 h-4 mr-2" />
+                WhatsApp QR
+              </Button>
+              <Button variant="outline" onClick={logout}>
+                <LogOut className="w-4 h-4 mr-2" />
+                Выйти
+              </Button>
+            </div>
           </div>
         </div>
       </div>

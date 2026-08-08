@@ -5,6 +5,7 @@ import { authApi } from './lib/api';
 import Login from './pages/Login';
 import AdminDashboard from './pages/AdminDashboard';
 import OperatorDashboard from './pages/OperatorDashboard';
+import WhatsAppQR from './pages/WhatsAppQR';
 
 function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode; allowedRoles: string[] }) {
   const { user, token } = useAuth();
@@ -51,6 +52,14 @@ function App() {
           element={
             <ProtectedRoute allowedRoles={['OPERATOR']}>
               <OperatorDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/whatsapp-qr"
+          element={
+            <ProtectedRoute allowedRoles={['ADMIN']}>
+              <WhatsAppQR />
             </ProtectedRoute>
           }
         />
