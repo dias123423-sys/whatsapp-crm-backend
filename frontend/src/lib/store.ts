@@ -33,7 +33,7 @@ interface LeadState {
 export const useLeads = create<LeadState>((set) => ({
   leads: [],
   selectedLead: null,
-  setLeads: (leads) => set({ leads }),
+  setLeads: (leads) => set({ leads: Array.isArray(leads) ? leads : [] }),
   setSelectedLead: (lead) => set({ selectedLead: lead }),
   updateLead: (id, data) =>
     set((state) => ({

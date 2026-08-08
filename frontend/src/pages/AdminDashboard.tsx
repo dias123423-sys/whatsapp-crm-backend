@@ -30,8 +30,8 @@ export default function AdminDashboard() {
         operatorsApi.getAll(),
         dashboardApi.getStats(),
       ]);
-      setLeads(leadsRes.data.data || leadsRes.data);
-      setOperators(operatorsRes.data);
+      setLeads(leadsRes.data.data || leadsRes.data || []);
+      setOperators(Array.isArray(operatorsRes.data) ? operatorsRes.data : []);
       setStats(statsRes.data);
     } catch (error) {
       console.error('Error loading data:', error);
