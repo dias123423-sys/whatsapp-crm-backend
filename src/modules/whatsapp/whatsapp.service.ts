@@ -102,9 +102,15 @@ export class WhatsAppService {
         ),
       );
 
+      // Evolution API v2 returns { instance: { instanceName, state } }
+      const state = response.data?.instance?.state || response.data?.state || 'close';
+      const phone = response.data?.instance?.ownerJid?.replace('@s.whatsapp.net', '')
+        || response.data?.phone
+        || response.data?.number
+        || null;
       return {
-        state: this.mapEvolutionStatus(response.data.state),
-        phone: response.data.number || null,
+        state: this.mapEvolutionStatus(state),
+        phone: phone ? `+${phone.replace('+', '')}` : null,
       };
     } catch (error) {
       this.logger.warn(`Failed to get status for ${instanceName}: ${error.message}`);
