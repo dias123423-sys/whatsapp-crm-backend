@@ -220,10 +220,9 @@ export class ExcelService {
 
       // Bot Result labels
       const resultLabels: Record<string, string> = {
-        BOOKED:      '✅ Запись была',
-        LOST:        '❌ Слив / отказ',
-        IN_PROGRESS: '⏳ В процессе',
-        UNKNOWN:     '—',
+        BOOKED:  '✅ Запись была',
+        LOST:    '❌ Слив / отказ',
+        UNKNOWN: '—',
       };
       const botResultText = lead.botResult ? (resultLabels[lead.botResult] ?? lead.botResult) : '—';
 
@@ -284,8 +283,8 @@ export class ExcelService {
         case 'BOOKED':
           resultCell.font = { color: { argb: 'FF00B050' }, bold: true };
           break;
-        case 'IN_PROGRESS':
-          resultCell.font = { color: { argb: 'FF0070C0' }, bold: true };
+        case 'UNKNOWN':
+          resultCell.font = { color: { argb: 'FF808080' }, italic: true };
           break;
         case 'LOST':
           resultCell.font = { color: { argb: 'FFD00000' }, bold: true };
@@ -332,12 +331,12 @@ export class ExcelService {
 
     // Bot Result stats
     const botBooked = leads.filter((l) => l.botResult === 'BOOKED').length;
-    const botInProgress = leads.filter((l) => l.botResult === 'IN_PROGRESS').length;
+    const botUnknown = leads.filter((l) => l.botResult === 'UNKNOWN').length;
     const botLost = leads.filter((l) => l.botResult === 'LOST').length;
     const sumBotRow = summaryRowNum + 2;
     ws.mergeCells(`A${sumBotRow}:H${sumBotRow}`);
     const botCell = ws.getCell(`A${sumBotRow}`);
-    botCell.value = `Результат: ✅ Записался ${botBooked} | ⏳ В процессе ${botInProgress} | ❌ Слив ${botLost}`;
+    botCell.value = `Результат: ✅ Записался ${botBooked} | — Не определён ${botUnknown} | ❌ Слив ${botLost}`;
     botCell.font = { bold: true, size: 11 };
     botCell.alignment = { horizontal: 'center' };
 

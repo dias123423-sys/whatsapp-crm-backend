@@ -46,7 +46,7 @@ export class LeadsController {
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'whatsappAccountId', required: false, type: String })
   @ApiQuery({ name: 'whatsappOwnerId', required: false, type: String })
-  @ApiQuery({ name: 'botResult', required: false, enum: ['BOOKED', 'IN_PROGRESS', 'LOST'] })
+  @ApiQuery({ name: 'botResult', required: false, enum: ['BOOKED', 'UNKNOWN', 'LOST'] })
   findAll(
     @CurrentUser() currentUser: any,
     @Query('page') page?: string,

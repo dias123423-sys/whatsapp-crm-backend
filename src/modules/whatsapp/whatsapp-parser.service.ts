@@ -479,13 +479,13 @@ export class WhatsAppParserService {
    *
    * BOOKED  — клиент явно подтвердил запись
    * LOST    — клиент явно отказался
-   * IN_PROGRESS — клиент думает / откладывает
+   * UNKNOWN — недостаточно данных (клиент думает / откладывает)
    * null    — недостаточно данных (не угадываем)
    *
    * Короткие ответы "иа"/"да"/"барам" → null (без контекста бота нельзя определить).
    * Бот находится в другом проекте — OUTGOING не используем.
    */
-  determineResult(fullConversation: string): 'BOOKED' | 'LOST' | 'IN_PROGRESS' | null {
+  determineResult(fullConversation: string): 'BOOKED' | 'LOST' | 'UNKNOWN' | null {
     if (!fullConversation?.trim()) return null;
 
     const text = fullConversation.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
@@ -552,7 +552,7 @@ export class WhatsAppParserService {
       }
     }
 
-    // ── 3. IN_PROGRESS: клиент думает / откладывает ───────────────
+    // ── 3. UNKNOWN: клиент думает / откладывает ───────────────
     const INPROG_PHRASES = [
       // Казахский
       'ойланам', 'ойланайын', 'ойланып алайын',
@@ -565,8 +565,8 @@ export class WhatsAppParserService {
     ];
     for (const p of INPROG_PHRASES) {
       if (lastLine.includes(p)) {
-        this.logger.log(`⏳ IN_PROGRESS | thinking: "${p}"`);
-        return 'IN_PROGRESS';
+        this.logger.log(`⏳ UNKNOWN | thinking: "${p}"`);
+        return 'UNKNOWN';
       }
     }
 
