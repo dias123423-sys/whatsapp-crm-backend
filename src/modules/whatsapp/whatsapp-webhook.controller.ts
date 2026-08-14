@@ -132,12 +132,6 @@ export class WhatsAppWebhookController {
     const data = payload?.data ?? {};
     const key = data?.key ?? {};
 
-    // Skip messages sent by us
-    if (key?.fromMe === true) {
-      this.logger.debug('Skip: fromMe=true');
-      return { status: 'ignored', reason: 'fromMe' };
-    }
-
     // ── Extract phone ──────────────────────────────
     const remoteJid: string = key?.remoteJid ?? '';
 
@@ -147,8 +141,6 @@ export class WhatsAppWebhookController {
       return { status: 'ignored', reason: 'group_message' };
     }
 
-    // Handle @lid (Android LID — use participant or try to resolve)
-    // For @lid we still process — normalizePhone strips everything except digits
     const rawPhone = remoteJid.split('@')[0];
     if (!rawPhone) {
       this.logger.warn(`No phone in remoteJid: ${remoteJid}`);
@@ -172,10 +164,33 @@ export class WhatsAppWebhookController {
       ''
     ).trim();
 
+    const messageId: string = key?.id || `${rawPhone}-${data?.messageTimestamp || Date.now()}`;
+
+    // ── Сохраняем OUTGOING (сообщения бота) для контекстного анализа ──
+    if (key?.fromMe === true) {
+      if (messageText) {
+        try {
+          // Ищем клиента по номеру
+          const client = await this.parserService.findClientByPhone(phone);
+          if (client) {
+            await this.parserService.saveOutgoingMessage({
+              clientId: client.id,
+              messageId,
+              messageText,
+              instanceName,
+            });
+            this.logger.debug(`💬 Saved OUTGOING for ${phone}: "${messageText.slice(0, 60)}"`);
+          }
+        } catch (e) {
+          this.logger.debug(`Skip OUTGOING save: ${e?.message}`);
+        }
+      }
+      return { status: 'ignored', reason: 'fromMe_saved' };
+    }
+
     // ── Other fields ──────────────────────────────
     const senderName: string = data?.pushName || '';
-    const messageId: string = key?.id || `${rawPhone}-${data?.messageTimestamp || Date.now()}`;
-    const source: string = data?.source || 'unknown'; // android | iphone | web
+    const source: string = data?.source || 'unknown';
 
     // ── Idempotency: skip exact duplicate messageId ──
     const existing = await this.prisma.message.findUnique({ where: { messageId } });

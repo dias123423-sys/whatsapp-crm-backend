@@ -259,6 +259,37 @@ export class WhatsAppParserService {
   }
 
   // ═══════════════════════════════════════════════
+  // PUBLIC HELPERS (используются из webhook controller)
+  // ═══════════════════════════════════════════════
+
+  /** Найти клиента по нормализованному телефону */
+  async findClientByPhone(phone: string) {
+    return this.prisma.client.findFirst({
+      where: { OR: [{ normalizedPhone: phone }, { phone }] },
+    });
+  }
+
+  /** Сохранить OUTGOING сообщение бота для контекстного анализа */
+  async saveOutgoingMessage(input: {
+    clientId: string;
+    messageId: string;
+    messageText: string;
+    instanceName: string;
+  }) {
+    await this.prisma.message.upsert({
+      where: { messageId: input.messageId },
+      update: {},
+      create: {
+        messageId: input.messageId,
+        clientId: input.clientId,
+        message: input.messageText,
+        direction: 'OUTGOING',
+        metadata: { instanceName: input.instanceName },
+      },
+    });
+  }
+
+  // ═══════════════════════════════════════════════
   // PRICE EXTRACTOR (deterministic, no AI)
   // ═══════════════════════════════════════════════
 
