@@ -123,38 +123,69 @@ export class WhatsAppParserService {
 
       this.logger.debug(`📝 Full conversation context: ${conversationMessages.length + 1} messages`);
 
-      // Анализируем ПОЛНЫЙ контекст, а не только текущее сообщение
+      // ─────────────────────────────────────────────────
+      // СТАРЫЙ PARSER: анализируем ПОЛНЫЙ контекст диалога
+      // Но НЕ ЗАМЕНЯЕМ то, что уже определено ранее
+      // ─────────────────────────────────────────────────
       const contextPrice = this.extractPrice(fullConversation);
       const contextOffer = await this.matchOffer(fullConversation, contextPrice?.price);
 
-      // Определяем botResult из полного диалога
+      // НОВЫЙ СЛОЙ: определяем botResult из полного диалога
       const botResult = this.determineBotResult(fullConversation);
 
       const updateData: any = {
-        // Всегда дополняем историю сообщений
+        // Всегда дополняем историю сообщений (не заменяем)
         originalMessage: recentActiveLead.originalMessage
           ? `${recentActiveLead.originalMessage}\n---\n${messageText}`
           : messageText,
         updatedAt: new Date(),
       };
 
-      // Обновляем процедуру ТОЛЬКО если новая найдена И (старой нет ИЛИ старая пустая)
+      // ─────────────────────────────────────────────────
+      // ПРАВИЛО: старый parser имеет ПРИОРИТЕТ
+      // Обновляем процедуру/цену ТОЛЬКО если их ещё НЕТ
+      // Например: "Озон капельница + БРТ" → 4990 уже определены → НЕ ТРОГАЕМ
+      // ─────────────────────────────────────────────────
       if (contextOffer) {
-        if (!recentActiveLead.parsedProcedures || recentActiveLead.parsedProcedures.length === 0) {
+        // Обновляем процедуру только если её ещё нет
+        const hasProcedure =
+          recentActiveLead.parsedProcedures &&
+          recentActiveLead.parsedProcedures.length > 0;
+        if (!hasProcedure) {
           updateData.parsedProcedures = contextOffer.procedures;
           updateData.offerId = contextOffer.offerId;
+          this.logger.log(`📋 Procedure enriched: "${contextOffer.offerName}"`);
         }
-        if (!recentActiveLead.parsedPrice || recentActiveLead.parsedPrice === 0) {
+
+        // Обновляем цену только если её ещё нет
+        const hasPrice =
+          recentActiveLead.parsedPrice && recentActiveLead.parsedPrice > 0;
+        if (!hasPrice) {
           updateData.parsedPrice = contextOffer.price;
           updateData.parsedCurrency = 'KZT';
+          this.logger.log(`💰 Price enriched: ${contextOffer.price} ₸`);
         }
+      } else if (contextPrice && (!recentActiveLead.parsedPrice || recentActiveLead.parsedPrice === 0)) {
+        // Если оффер не найден, но есть цена — сохраняем только цену
+        updateData.parsedPrice = contextPrice.price;
+        updateData.parsedCurrency = 'KZT';
+        this.logger.log(`💰 Price-only enriched: ${contextPrice.price} ₸`);
       }
 
-      // Обновляем botResult если он изменился
-      if (botResult && botResult !== recentActiveLead.botResult) {
+      // ─────────────────────────────────────────────────
+      // НОВЫЙ СЛОЙ: обновляем botResult
+      // IN_PROGRESS не перезаписывает BOOKED (если уже записался)
+      // ─────────────────────────────────────────────────
+      const prevResult = recentActiveLead.botResult;
+      const shouldUpdateResult =
+        botResult !== prevResult &&
+        // Не деградируем: BOOKED → IN_PROGRESS не допускаем
+        !(prevResult === 'BOOKED' && botResult === 'IN_PROGRESS');
+
+      if (shouldUpdateResult) {
         updateData.botResult = botResult;
         updateData.botResultUpdatedAt = new Date();
-        this.logger.log(`🎯 Bot result updated: ${recentActiveLead.botResult ?? 'NULL'} → ${botResult}`);
+        this.logger.log(`🎯 Bot result: ${prevResult ?? 'null'} → ${botResult}`);
       }
 
       await this.prisma.lead.update({
@@ -163,7 +194,7 @@ export class WhatsAppParserService {
       });
 
       this.logger.log(
-        `✅ Updated lead ${recentActiveLead.id} | procedure=${contextOffer?.offerName ?? 'unchanged'} | result=${botResult ?? 'unchanged'}`,
+        `✅ Lead ${recentActiveLead.id} updated | procedure=${contextOffer?.offerName ?? (recentActiveLead.parsedProcedures?.[0] ?? 'unchanged')} | price=${updateData.parsedPrice ?? recentActiveLead.parsedPrice ?? 'unchanged'} | result=${botResult}`,
       );
 
       return null; // Не создаём дубликат
@@ -458,73 +489,155 @@ export class WhatsAppParserService {
   }
 
   // ═══════════════════════════════════════════════
-  // BOT RESULT DETECTOR (deterministic, no AI)
+  // BOT RESULT DETECTOR (context-aware, no AI)
   // ═══════════════════════════════════════════════
 
   /**
-   * Определяет результат диалога по всему контексту.
-   * 
-   * BOOKED: явное согласие на запись
-   * LOST: явный отказ
-   * IN_PROGRESS: всё остальное (по умолчанию)
-   * 
-   * Приоритет:
-   * 1. BOOKED (если есть явное подтверждение)
-   * 2. LOST (если есть явный отказ)
-   * 3. IN_PROGRESS (если неопределённо)
+   * Определяет результат диалога по ВСЕМУ контексту.
+   *
+   * Логика:
+   *   BOOKED     — клиент явно подтвердил запись: назвал время/дату OR написал
+   *                конкретную фразу записи ("запишите меня", "записываюсь" и т.д.)
+   *   LOST       — клиент явно отказался ("нет", "дорого", "передумала" и т.д.)
+   *   IN_PROGRESS — всё остальное (уточняет, думает, молчит)
+   *
+   * Важно: простое "да" НЕ = BOOKED, если нет контекста записи.
+   * Например "Да, а цена точно 7000?" → IN_PROGRESS
    */
-  determineBotResult(fullConversation: string): 'BOOKED' | 'IN_PROGRESS' | 'LOST' | null {
-    if (!fullConversation) return 'IN_PROGRESS';
+  determineBotResult(fullConversation: string): 'BOOKED' | 'IN_PROGRESS' | 'LOST' {
+    if (!fullConversation || !fullConversation.trim()) return 'IN_PROGRESS';
 
-    const normalized = fullConversation.toLowerCase();
+    const text = fullConversation.toLowerCase();
 
     // ─────────────────────────────────────────────────
-    // BOOKED: Явное согласие на запись
+    // LOST: Явный отказ — проверяем ПЕРВЫМ (высокий приоритет)
     // ─────────────────────────────────────────────────
-    const bookedPatterns = [
-      // Русский
-      /\b(да|давайте|хорошо|согласен|согласна|подходит|подтверждаю|запиш[иы])/i,
-      /\b(запишите\s+меня|я\s+приду|буду|записываюсь)/i,
-      /\b(запишите\s+на|записать\s+на|хочу\s+записаться\s+на)/i,
+    const lostPhrases = [
+      // Явные отказы от записи
+      'не буду',
+      'не хочу',
+      'не приду',
+      'не актуально',
+      'отказываюсь',
+      'передумала',
+      'передумал',
+      'не интересно',
+      'не нужно',
+      'не надо',
+      'спасибо не надо',
+      'спасибо, не надо',
+      'спасибо не нужно',
+      'не подходит',
+      'мне не подходит',
+      'запишусь в другом',
+      'в другом месте',
+      'не актуально',
+      // Ценовой отказ
+      'дорого',
+      'слишком дорого',
+      'дороговато',
+      'нет, дорого',
+      'это дорого',
       // Казахский
-      /\b(иә|жазып\s+қойыңыз|жазылыңыз|жазылғым\s+келеді|келемін)/i,
-      /\b(жазып\s+алыңыз|мақұл|келісемін)/i,
+      'жоқ',
+      'қымбат',
+      'керек емес',
+      'бармаймын',
+      'қаламаймын',
+      'ойымнан қайттым',
+      'қызықты емес',
+      'ауысып кетем',
     ];
 
-    for (const pattern of bookedPatterns) {
-      if (pattern.test(normalized)) {
-        // Дополнительная проверка: есть ли контекст записи?
-        // (чтобы избежать false positive на простое "да" вне контекста)
-        const hasBookingContext = /запис|хочу|можно|время|дата|завтра|сегодня|жазы/i.test(normalized);
-        if (hasBookingContext) {
-          return 'BOOKED';
-        }
+    for (const phrase of lostPhrases) {
+      if (text.includes(phrase)) {
+        this.logger.debug(`❌ LOST detected by phrase: "${phrase}"`);
+        return 'LOST';
       }
     }
 
     // ─────────────────────────────────────────────────
-    // LOST: Явный отказ
+    // BOOKED: Явное подтверждение записи
+    //
+    // Принцип: нужно ЛИБО
+    //   A) Явная фраза записи ("запишите меня", "записываюсь", ...)
+    //   B) Подтверждение ("да", "давайте") + контекст записи (время/дата/конкретный вопрос)
     // ─────────────────────────────────────────────────
-    const lostPatterns = [
-      // Русский
-      /\b(нет|не\s+буду|не\s+хочу|не\s+приду|не\s+актуально|отказываюсь)/i,
-      /\b(дорого|слишком\s+дорого|передумал|передумала|не\s+интересно)/i,
-      /\b(не\s+подходит|мне\s+не\s+подходит|запишусь\s+в\s+другом)/i,
-      /\b(спасибо\s+не\s+нужно|не\s+надо)/i,
+
+    // A) Однозначные фразы записи — сами по себе = BOOKED
+    const strongBookedPhrases = [
+      'запишите меня',
+      'запишите на',
+      'записывайте',
+      'записываюсь',
+      'я записываюсь',
+      'буду записан',
+      'подтверждаю запись',
+      'буду на',
+      'приеду на',
+      'я приду',
+      'приду в',
+      'приеду в',
+      'буду завтра',
+      'буду сегодня',
       // Казахский
-      /\b(жоқ|қымбат|керек\s+емес|бармаймын|қаламаймын)/i,
-      /\b(ойымнан\s+қайттым|қызықты\s+емес)/i,
+      'жазып қойыңыз',
+      'жазып алыңыз',
+      'жазылдым',
+      'жазылғым келеді',
+      'барамын',
+      'келемін',
+      'мақұл, жазыңыз',
+      'иә, жазыңыз',
     ];
 
-    for (const pattern of lostPatterns) {
-      if (pattern.test(normalized)) {
-        return 'LOST';
+    for (const phrase of strongBookedPhrases) {
+      if (text.includes(phrase)) {
+        this.logger.debug(`✅ BOOKED detected by strong phrase: "${phrase}"`);
+        return 'BOOKED';
+      }
+    }
+
+    // B) Мягкое согласие + явное время/дата = BOOKED
+    // Клиент сказал "да/давайте/хорошо/ок" И назвал конкретное время или дату
+    const softAgreement =
+      /\b(да|давайте|хорошо|ок|окей|ладно|подходит|согласна|согласен|мақұл|иә)\b/.test(text);
+
+    const hasDateTime =
+      // Время: "в 16:00", "в 16", "в четыре", "завтра", "послезавтра", "в пятницу"
+      /в\s+\d{1,2}(:\d{2})?/.test(text) ||
+      /\b(завтра|послезавтра|сегодня|в\s+(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье))\b/.test(text) ||
+      // Дата: "15 августа", "5-го", "на следующей неделе"
+      /\b\d{1,2}[\s-](января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\b/.test(text) ||
+      /\b(на\s+след|следующей\s+неделе|на\s+этой\s+неделе)\b/.test(text);
+
+    if (softAgreement && hasDateTime) {
+      this.logger.debug(`✅ BOOKED detected: soft agreement + datetime`);
+      return 'BOOKED';
+    }
+
+    // C) Мягкое согласие + вопрос бота про запись = BOOKED
+    // Если в диалоге был вопрос "записать вас?" и клиент ответил "да"
+    const botAskedToBook =
+      /записат[ьь]\s+вас|записать\s+на|хотите\s+записаться|записываем\s+вас/.test(text);
+
+    if (softAgreement && botAskedToBook) {
+      // Но НЕ если клиент сразу задал уточняющий вопрос после "да"
+      // Пример: "Да, а цена точно 7000?" → lines[-1] содержит вопрос
+      const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+      const lastClientLine = lines[lines.length - 1] || '';
+      const lastIsQuestion = lastClientLine.endsWith('?') || /а\s+\w+/.test(lastClientLine);
+
+      if (!lastIsQuestion) {
+        this.logger.debug(`✅ BOOKED detected: agreement after bot booking question`);
+        return 'BOOKED';
       }
     }
 
     // ─────────────────────────────────────────────────
     // IN_PROGRESS: всё остальное
     // ─────────────────────────────────────────────────
+    this.logger.debug(`⏳ IN_PROGRESS: no clear booking or refusal`);
     return 'IN_PROGRESS';
   }
 }
