@@ -125,10 +125,10 @@ export class ExcelService {
     ws.properties.defaultRowHeight = 18;
 
     // ── Header block ──
-    const COLS = 18; // количество колонок (A–R)
-    const colRange = `A1:R1`;
+    const TOTAL_COLS = 19; // A–S
+    const colRange   = `A1:S1`;
 
-    ws.mergeCells(`A1:R1`);
+    ws.mergeCells(colRange);
     const titleCell = ws.getCell('A1');
     titleCell.value = title;
     titleCell.font = { size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -136,7 +136,7 @@ export class ExcelService {
     titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1D6F42' } };
     ws.getRow(1).height = 30;
 
-    ws.mergeCells('A2:R2');
+    ws.mergeCells('A2:S2');
     ws.getCell('A2').value = `Дата формирования: ${new Date().toLocaleString('ru-RU', {
       timeZone: process.env.APP_TIMEZONE || 'Asia/Almaty',
     })}`;
@@ -144,7 +144,7 @@ export class ExcelService {
     ws.getRow(2).height = 18;
 
     if (period) {
-      ws.mergeCells('A3:R3');
+      ws.mergeCells('A3:S3');
       ws.getCell('A3').value = `Период: ${period}`;
       ws.getCell('A3').alignment = { horizontal: 'center' };
       ws.getRow(3).height = 16;
@@ -152,34 +152,36 @@ export class ExcelService {
 
     const dataStartRow = period ? 5 : 4;
 
-    // ── Column definitions ──
+    // ── Column definitions (19 колонок A–S) ──
     ws.columns = [
-      { key: 'no',           header: '№',               width: 6 },
-      { key: 'date',         header: 'Дата',             width: 12 },
-      { key: 'time',         header: 'Время',            width: 8 },
-      { key: 'phone',        header: 'Телефон',          width: 18 },
-      { key: 'name',         header: 'Имя',              width: 22 },
-      { key: 'procedure',    header: 'Процедура',        width: 30 },
-      { key: 'price',        header: 'Цена',             width: 14 },
-      { key: 'currency',     header: 'Валюта',           width: 8 },
-      { key: 'whatsapp',     header: 'WhatsApp',         width: 14 },
-      { key: 'owner',        header: 'Владелец WA',      width: 14 },
-      { key: 'operator',     header: 'Оператор',         width: 18 },
-      { key: 'status',       header: 'Статус',           width: 14 },
-      { key: 'botResult',    header: 'Результат',        width: 14 },
-      { key: 'source',       header: 'Источник',         width: 14 },
-      { key: 'campaign',     header: 'Campaign',         width: 18 },
-      { key: 'adId',         header: 'Ad ID',            width: 16 },
+      { key: 'no',           header: '№',                     width: 6  },
+      { key: 'createdDate',  header: 'Дата лида',             width: 12 },
+      { key: 'createdTime',  header: 'Время лида',            width: 8  },
+      { key: 'phone',        header: 'Телефон',               width: 18 },
+      { key: 'name',         header: 'Имя',                   width: 22 },
+      { key: 'procedure',    header: 'Процедура',             width: 30 },
+      { key: 'price',        header: 'Цена',                  width: 14 },
+      { key: 'currency',     header: 'Валюта',                width: 8  },
+      { key: 'parsedDate',   header: 'Дата записи',           width: 14 },
+      { key: 'parsedTime',   header: 'Время записи',          width: 12 },
+      { key: 'whatsapp',     header: 'WhatsApp',              width: 14 },
+      { key: 'owner',        header: 'Владелец WA',           width: 14 },
+      { key: 'operator',     header: 'Оператор',              width: 18 },
+      { key: 'status',       header: 'Статус',                width: 14 },
+      { key: 'botResult',    header: 'Результат',             width: 16 },
+      { key: 'source',       header: 'Источник',              width: 14 },
+      { key: 'campaign',     header: 'Campaign',              width: 18 },
+      { key: 'adId',         header: 'Ad ID',                 width: 16 },
       { key: 'message',      header: 'Оригинальное сообщение', width: 40 },
     ];
 
     // ── Header row style ──
     const headerRow = ws.getRow(dataStartRow);
-    // Заполняем заголовки
     const headers = [
-      '№','Дата','Время','Телефон','Имя','Процедура',
-      'Цена','Валюта','WhatsApp','Владелец WA','Оператор',
-      'Статус','Результат','Источник','Campaign','Ad ID','Оригинальное сообщение',
+      '№', 'Дата лида', 'Время лида', 'Телефон', 'Имя', 'Процедура',
+      'Цена', 'Валюта', 'Дата записи', 'Время записи',
+      'WhatsApp', 'Владелец WA', 'Оператор',
+      'Статус', 'Результат', 'Источник', 'Campaign', 'Ad ID', 'Оригинальное сообщение',
     ];
     headers.forEach((h, i) => {
       const cell = headerRow.getCell(i + 1);
@@ -200,7 +202,7 @@ export class ExcelService {
     // Auto filter
     ws.autoFilter = {
       from: { row: dataStartRow, column: 1 },
-      to: { row: dataStartRow, column: 17 },
+      to:   { row: dataStartRow, column: 19 },
     };
 
     // ── Data rows ──
@@ -218,11 +220,16 @@ export class ExcelService {
 
       // Bot Result labels
       const resultLabels: Record<string, string> = {
-        BOOKED: '✅ Записался',
+        BOOKED:      '✅ Запись была',
+        LOST:        '❌ Слив / отказ',
         IN_PROGRESS: '⏳ В процессе',
-        LOST: '❌ Слив',
+        UNKNOWN:     '—',
       };
-      const botResultText = lead.botResult ? resultLabels[lead.botResult] : '—';
+      const botResultText = lead.botResult ? (resultLabels[lead.botResult] ?? lead.botResult) : '—';
+
+      // Дата/время записи (из диалога)
+      const parsedDateStr = (lead as any).parsedDate ?? '—';
+      const parsedTimeStr = (lead as any).parsedTime ?? '—';
 
       const row = ws.addRow([
         index + 1,
@@ -231,8 +238,10 @@ export class ExcelService {
         lead.client?.phone || lead.client?.normalizedPhone || '—',
         lead.client?.whatsappName || lead.client?.name || '—',
         procedures,
-        priceNum !== null ? priceNum : '',   // числовое значение для Excel
-        'KZT',                               // валюта всегда KZT
+        priceNum !== null ? priceNum : '',
+        'KZT',
+        parsedDateStr,
+        parsedTimeStr,
         lead.whatsappAccount?.name || '—',
         lead.whatsappOwner?.name || '—',
         lead.operator?.user?.name || '—',
@@ -251,8 +260,8 @@ export class ExcelService {
         row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F5F5' } };
       }
 
-      // Цвет статуса
-      const statusCell = row.getCell(12);
+      // Цвет статуса (колонка 14)
+      const statusCell = row.getCell(14);
       switch (lead.status) {
         case 'NEW':
           statusCell.font = { color: { argb: 'FF0070C0' }, bold: true };

@@ -111,9 +111,11 @@ model Lead {
   priority          Int        @default(0)
   notes             String?    @db.Text
   period            Period? // DAY или NIGHT
-  botResult         BotResult? // Результат от внешнего WhatsApp бота
-  botResultUpdatedAt DateTime? // Когда бот обновил результат
-  externalConversationId String? // ID диалога из внешней системы бота для точной привязки
+  botResult         BotResult? // Результат диалога: BOOKED/LOST/UNKNOWN
+  botResultUpdatedAt DateTime? // Когда обновился результат
+  externalConversationId String? // ID диалога из внешней системы
+  parsedDate        String?   // Дата из диалога: "2026-08-15"
+  parsedTime        String?   // Время из диалога: "16:00"
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
   assignedAt        DateTime? // Когда назначен оператору
@@ -159,9 +161,9 @@ enum Period {
 }
 
 enum BotResult {
-  BOOKED // Клиент записался через бота
-  IN_PROGRESS // Диалог с ботом в процессе
-  LOST // Клиент отказался / слив
+  BOOKED      // Клиент явно подтвердил запись
+  LOST        // Клиент отказался / слив
+  IN_PROGRESS // Диалог в процессе (клиент ещё не дал ответа)
 }
 
 // ============================================

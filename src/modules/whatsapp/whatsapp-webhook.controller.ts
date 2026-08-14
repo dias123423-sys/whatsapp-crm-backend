@@ -107,11 +107,6 @@ export class WhatsAppWebhookController {
         case 'messages.upsert':
           return await this.handleIncomingMessage(payload, instanceName);
 
-        // SEND_MESSAGE — бот отправил сообщение клиенту → сохраняем как OUTGOING
-        case 'send.message':
-        case 'SEND_MESSAGE':
-          return await this.handleOutgoingMessage(payload, instanceName);
-
         case 'connection.update':
           return await this.handleConnectionUpdate(payload, instanceName);
 
@@ -171,26 +166,9 @@ export class WhatsAppWebhookController {
 
     const messageId: string = key?.id || `${rawPhone}-${data?.messageTimestamp || Date.now()}`;
 
-    // ── Сохраняем OUTGOING (сообщения бота) для контекстного анализа ──
+    // ── Skip fromMe (bot's own messages — we don't process them) ──
     if (key?.fromMe === true) {
-      if (messageText) {
-        try {
-          // Ищем клиента по номеру
-          const client = await this.parserService.findClientByPhone(phone);
-          if (client) {
-            await this.parserService.saveOutgoingMessage({
-              clientId: client.id,
-              messageId,
-              messageText,
-              instanceName,
-            });
-            this.logger.debug(`💬 Saved OUTGOING for ${phone}: "${messageText.slice(0, 60)}"`);
-          }
-        } catch (e) {
-          this.logger.debug(`Skip OUTGOING save: ${e?.message}`);
-        }
-      }
-      return { status: 'ignored', reason: 'fromMe_saved' };
+      return { status: 'ignored', reason: 'fromMe' };
     }
 
     // ── Other fields ──────────────────────────────
@@ -241,60 +219,6 @@ export class WhatsAppWebhookController {
   // ════════════════════════════════════════════════
   // CONNECTION UPDATE
   // ════════════════════════════════════════════════
-
-  // ════════════════════════════════════════════════
-  // OUTGOING MESSAGE (бот → клиент)
-  // Сохраняем как direction=OUTGOING для context анализа
-  // ════════════════════════════════════════════════
-
-  private async handleOutgoingMessage(payload: any, instanceName: string) {
-    const data = payload?.data ?? {};
-    const key  = data?.key ?? {};
-
-    // Только исходящие от нас
-    if (key?.fromMe !== true) {
-      return { status: 'ignored', reason: 'not_from_me' };
-    }
-
-    // Не обрабатываем групповые
-    const remoteJid: string = key?.remoteJid ?? '';
-    if (remoteJid.includes('@g.us')) {
-      return { status: 'ignored', reason: 'group' };
-    }
-
-    const rawPhone = remoteJid.split('@')[0];
-    if (!rawPhone) return { status: 'ignored', reason: 'no_phone' };
-
-    const phone = this.normalizePhone(rawPhone);
-    if (!phone || phone.length < 7) return { status: 'ignored', reason: 'invalid_phone' };
-
-    const msgContent = data?.message ?? {};
-    const messageText: string = (
-      msgContent?.conversation ||
-      msgContent?.extendedTextMessage?.text ||
-      ''
-    ).trim();
-
-    if (!messageText) return { status: 'ignored', reason: 'empty_message' };
-
-    const messageId: string = key?.id || `out-${rawPhone}-${data?.messageTimestamp || Date.now()}`;
-
-    // Ищем клиента и сохраняем OUTGOING
-    const client = await this.parserService.findClientByPhone(phone);
-    if (client) {
-      await this.parserService.saveOutgoingMessage({
-        clientId: client.id,
-        messageId,
-        messageText,
-        instanceName,
-      });
-      this.logger.log(`💬 OUTGOING saved: ${phone} → "${messageText.slice(0, 60)}"`);
-    } else {
-      this.logger.debug(`💬 OUTGOING skip: no client for ${phone}`);
-    }
-
-    return { status: 'ok', direction: 'OUTGOING' };
-  }
 
   private async handleConnectionUpdate(payload: any, instanceName: string) {
     const data = payload?.data ?? {};
