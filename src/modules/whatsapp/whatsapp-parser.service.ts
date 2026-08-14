@@ -236,13 +236,14 @@ export class WhatsAppParserService {
     const normalized = text.toLowerCase().replace(/\s+/g, ' ');
 
     // Казахский "7к" / "7 к" → 7000
-    const kMynMatch = normalized.match(/\b(\d+)\s*[кk]\b/i);
+    const kMynMatch = normalized.match(/(^|\s)(\d+)\s*[кk]($|\s)/i);
     if (kMynMatch) {
-      const val = parseInt(kMynMatch[1], 10) * 1000;
+      const val = parseInt(kMynMatch[2], 10) * 1000;
       if (val >= 1000 && val <= 500_000) return { price: val, currency: '₸' };
     }
-    // "7 мың" / "7 мын" / "7мын"
-    const mynMatch = normalized.match(/\b(\d+)\s*м[ыи]н[г]?\b/i);
+    // "7 мың" / "7 мын" / "7мын" — казахский "тысяч"
+    // \b не работает с кириллицей, используем lookahead/lookbehind
+    const mynMatch = normalized.match(/(\d+)\s*м[ыи][нң][г]?(?!\d)/i);
     if (mynMatch) {
       const val = parseInt(mynMatch[1], 10) * 1000;
       if (val >= 1000 && val <= 500_000) return { price: val, currency: '₸' };
@@ -300,25 +301,25 @@ export class WhatsAppParserService {
     };
 
     // сегодня / бүгін / бугин
-    if (/\b(сегодня|бүгін|бугін|бугин|бүгінге|бугинге)\b/.test(t)) {
+    if (/(^|\s)(сегодня|бүгін|бугін|бугин|бүгінге|бугинге)(\s|$)/.test(t)) {
       return todayStr;
     }
     // завтра / ертең / ертен / ертеңге
-    if (/\b(завтра|ертең|ертен|ертеңге|ертенге)\b/.test(t)) {
+    if (/(^|\s)(завтра|ертең|ертен|ертеңге|ертенге)(\s|$)/.test(t)) {
       return addDays(todayDate, 1);
     }
     // послезавтра
-    if (/\b(послезавтра)\b/.test(t)) {
+    if (/(^|\s)(послезавтра)(\s|$)/.test(t)) {
       return addDays(todayDate, 2);
     }
     // дни недели RU
-    if (/\b(понедельник|дүйсенбі|дуйсенби)\b/.test(t)) return dayOfWeekOffset(1);
-    if (/\b(вторник|сейсенбі|сейсенби)\b/.test(t))    return dayOfWeekOffset(2);
-    if (/\b(среду?|сәрсенбі|сарсенби)\b/.test(t))     return dayOfWeekOffset(3);
-    if (/\b(четверг|бейсенбі|бейсенби)\b/.test(t))    return dayOfWeekOffset(4);
-    if (/\b(пятниц[ау]?|жұма|жума)\b/.test(t))        return dayOfWeekOffset(5);
-    if (/\b(суббот[ау]?|сенбі|сенби)\b/.test(t))      return dayOfWeekOffset(6);
-    if (/\b(воскресенье|жексенбі|жексенби)\b/.test(t)) return dayOfWeekOffset(0);
+    if (/(^|\s)(понедельник|дүйсенбі|дуйсенби)(\s|$)/.test(t)) return dayOfWeekOffset(1);
+    if (/(^|\s)(вторник|сейсенбі|сейсенби)(\s|$)/.test(t))    return dayOfWeekOffset(2);
+    if (/(^|\s)(среду?|сәрсенбі|сарсенби)(\s|$)/.test(t))     return dayOfWeekOffset(3);
+    if (/(^|\s)(четверг|бейсенбі|бейсенби)(\s|$)/.test(t))    return dayOfWeekOffset(4);
+    if (/(^|\s)(пятниц[ау]?|жұма|жума)(\s|$)/.test(t))        return dayOfWeekOffset(5);
+    if (/(^|\s)(суббот[ау]?|сенбі|сенби)(\s|$)/.test(t))      return dayOfWeekOffset(6);
+    if (/(^|\s)(воскресенье|жексенбі|жексенби)(\s|$)/.test(t)) return dayOfWeekOffset(0);
 
     // "15 августа" / "15 авг" и т.д.
     const months: Record<string, number> = {
@@ -361,9 +362,9 @@ export class WhatsAppParserService {
     }
 
     // "в 16" / "в 9" — только если явно "в X" и X ≤ 23
-    const inTimeMatch = t.match(/\bв\s+(\d{1,2})\b/);
+    const inTimeMatch = t.match(/(^|\s)в\s+(\d{1,2})(\s|$)/);
     if (inTimeMatch) {
-      const h = parseInt(inTimeMatch[1], 10);
+      const h = parseInt(inTimeMatch[2], 10);
       if (h >= 6 && h <= 23) {
         return `${String(h).padStart(2, '0')}:00`;
       }
@@ -379,7 +380,8 @@ export class WhatsAppParserService {
     }
 
     // "4-те" / "4те" / "төртте" — казахские суффиксы времени
-    const kzTimeMatch = t.match(/\b(\d{1,2})[\s-]?(?:те|де|да|та)\b/);
+    // Паттерн: цифра + опциональный дефис + казахский падежный суффикс
+    const kzTimeMatch = t.match(/(\d{1,2})-?(?:те|де|да|та)(?!\w)/);
     if (kzTimeMatch) {
       const h = parseInt(kzTimeMatch[1], 10);
       // Только разумное время (не путаем с ценой типа 3990)
