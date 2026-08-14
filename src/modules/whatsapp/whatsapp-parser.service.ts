@@ -186,12 +186,25 @@ export class WhatsAppParserService {
 
     // ─────────────────────────────────────────────────
     // STEP 9: Create new Lead
+    // Парсим по fullConversation (все сообщения за 24ч + текущее)
+    // чтобы не терять данные если это не первое сообщение клиента
     // ─────────────────────────────────────────────────
-    const priceResult  = this.extractPrice(messageText);
-    const offerMatch   = await this.matchOffer(messageText, priceResult?.price);
-    const parsedDate   = this.extractDate(messageText);
-    const parsedTime   = this.extractTime(messageText);
-    const result       = this.determineResult(messageText);
+
+    // Загружаем все предыдущие сообщения клиента за 24ч
+    const prevMessages = await this.prisma.message.findMany({
+      where: { clientId: client.id, createdAt: { gte: oneDayAgo } },
+      orderBy: { createdAt: 'asc' },
+    });
+    // fullContext = история + текущее сообщение
+    const fullContext = prevMessages.length > 0
+      ? prevMessages.map((m) => m.message).join('\n') + '\n' + messageText
+      : messageText;
+
+    const priceResult  = this.extractPrice(fullContext);
+    const offerMatch   = await this.matchOffer(fullContext, priceResult?.price);
+    const parsedDate   = this.extractDate(fullContext);
+    const parsedTime   = this.extractTime(fullContext);
+    const result       = this.determineResult(fullContext);
     const period       = this.determinePeriod();
 
     const lead = await this.prisma.lead.create({
@@ -216,7 +229,7 @@ export class WhatsAppParserService {
     });
 
     this.logger.log(
-      `✅ Lead created: ${lead.id} | proc=${offerMatch?.offerName ?? 'UNKNOWN'} | price=${offerMatch?.price ?? priceResult?.price ?? 'NULL'} | date=${parsedDate ?? '—'} | time=${parsedTime ?? '—'} | result=${result ?? '—'}`,
+      `✅ Lead created: ${lead.id} | context=${prevMessages.length + 1}msgs | proc=${offerMatch?.offerName ?? 'UNKNOWN'} | price=${offerMatch?.price ?? priceResult?.price ?? 'NULL'} | date=${parsedDate ?? '—'} | time=${parsedTime ?? '—'} | result=${result ?? '—'}`,
     );
 
     return lead;
@@ -459,57 +472,62 @@ export class WhatsAppParserService {
   // ═══════════════════════════════════════════════
 
   /**
-   * Определяет итог диалога по INCOMING сообщениям клиента.
+   * STAGE 2 — RESULT PARSER
+   *
+   * Определяет итог диалога ТОЛЬКО по явным фразам клиента.
+   * Запускается ПОСЛЕ сбора основных данных (procedure/price/date/time).
    *
    * BOOKED  — клиент явно подтвердил запись
    * LOST    — клиент явно отказался
-   * UNKNOWN — недостаточно данных (клиент думает, уточняет)
-   * null    — нет значимого контента для определения
+   * IN_PROGRESS — клиент думает / откладывает
+   * null    — недостаточно данных (не угадываем)
    *
-   * НЕ использует OUTGOING сообщения бота (бот в другом проекте).
-   * Анализирует только то, что написал клиент.
+   * Короткие ответы "иа"/"да"/"барам" → null (без контекста бота нельзя определить).
+   * Бот находится в другом проекте — OUTGOING не используем.
    */
   determineResult(fullConversation: string): 'BOOKED' | 'LOST' | 'IN_PROGRESS' | null {
     if (!fullConversation?.trim()) return null;
 
     const text = fullConversation.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
 
-    // Берём последнюю строку клиента
+    // Берём последнюю строку — самый свежий ответ клиента
     const lines = text.split(/\n|---/).map((l) => l.trim()).filter(Boolean);
     const lastLine = lines[lines.length - 1] ?? '';
 
-    // ── 1. BOOKED: сильные явные фразы записи ─────────────────────
-    const BOOKED_STRONG = [
-      // Казахский
+    // ── 1. BOOKED: только явные фразы подтверждения записи ───────
+    const BOOKED_PHRASES = [
+      // Казахский — явная запись
       'жазып қойыңыз', 'жазып коюыныз', 'жазып койыныз', 'жазып қойыныз',
-      'жазып алыңыз', 'жазып алыныз', 'жазылдым',
-      'жазып қой', 'жазып кой',
-      'барамын, жаз', 'келемін, жаз',
-      'иа, жазып', 'иә, жазып', 'да, жазып', 'ия, жазып',
-      // Русский
-      'запишите меня', 'запишите на', 'записывайте', 'записываюсь',
+      'жазып алыңыз',  'жазып алыныз',  'жазылдым',
+      'жазып қой',     'жазып кой',
+      'барамын, жаз',  'келемін, жаз',
+      'иа, жазып',     'иә, жазып',     'да, жазып',    'ия, жазып',
+      // Русский — явная запись
+      'запишите меня', 'запишите на',    'записывайте',  'записываюсь',
       'я записываюсь', 'подтверждаю запись',
-      'приеду на', 'я приду', 'буду завтра', 'буду сегодня',
-      'да, записывайте', 'да, запишите', 'барамын, запишите', 'келемін, запишите',
+      'приеду на',     'я приду',        'буду завтра',  'буду сегодня',
+      'да, записывайте', 'да, запишите',
+      'барамын, запишите', 'келемін, запишите',
     ];
-    for (const p of BOOKED_STRONG) {
+    for (const p of BOOKED_PHRASES) {
       if (lastLine.includes(p) || text.includes(p)) {
-        this.logger.log(`✅ BOOKED | strong phrase: "${p}"`);
+        this.logger.log(`✅ BOOKED | phrase: "${p}"`);
         return 'BOOKED';
       }
     }
 
-    // ── 2. LOST: явный отказ ──────────────────────────────────────
+    // ── 2. LOST: явный отказ ─────────────────────────────────────
     const LOST_PHRASES = [
-      // Казахский
-      'жоқ', 'жок',
-      'бармаймын', 'бармайм', 'бармаим', 'бармай',
+      // Казахский — полные фразы (не одиночные слова чтобы не было ложных срабатываний)
+      'бармаймын', 'бармайм', 'бармаим',
       'келмеймін', 'келмейм', 'келмим',
       'керек емес', 'керек жоқ', 'керек жок',
-      'қымбат', 'қымбат екен', 'кымбат',
+      'қымбат екен', 'кымбат екен',
       'ойымнан қайттым', 'қаламаймын',
       'жоқ, керек емес',
-      // Русский
+      // Одиночные KZ — только если это вся строка или с пунктуацией
+      // (проверяем отдельно ниже)
+      // Русский — фразы
       'не буду', 'не хочу', 'не приду', 'не актуально', 'отказываюсь',
       'передумала', 'передумал', 'не интересно', 'не нужно', 'не надо',
       'спасибо не надо', 'спасибо, не надо', 'не подходит', 'мне не подходит',
@@ -523,15 +541,26 @@ export class WhatsAppParserService {
       }
     }
 
-    // ── 3. IN_PROGRESS: клиент думает / уточняет ─────────────────
+    // Короткие KZ слова отказа — только если lastLine по сути и есть это слово
+    const kzShortLost = ['жоқ', 'жок', 'қымбат', 'кымбат'];
+    for (const p of kzShortLost) {
+      // Совпадение: lastLine — именно это слово (с возможной пунктуацией)
+      const cleaned = lastLine.replace(/[.,!?]/g, '').trim();
+      if (cleaned === p || cleaned.startsWith(p + ' ') || cleaned.endsWith(' ' + p)) {
+        this.logger.log(`❌ LOST | short KZ refusal: "${p}"`);
+        return 'LOST';
+      }
+    }
+
+    // ── 3. IN_PROGRESS: клиент думает / откладывает ───────────────
     const INPROG_PHRASES = [
       // Казахский
       'ойланам', 'ойланайын', 'ойланып алайын',
-      'кейін айтам', 'кейін жазам', 'кейин айтам', 'кейін',
+      'кейін айтам', 'кейін жазам', 'кейин айтам',
       'білмеймін', 'білмим', 'ақылдасам', 'ақылдасып алайын',
       // Русский
       'я подумаю', 'подумаю', 'надо подумать',
-      'позже', 'потом', 'позже скажу',
+      'позже', 'потом', 'позже скажу', 'позже напишу',
       'ещё не знаю',
     ];
     for (const p of INPROG_PHRASES) {
@@ -541,7 +570,7 @@ export class WhatsAppParserService {
       }
     }
 
-    // ── 4. Если диалог есть, но ничего явного → null (не угадываем) ─
+    // ── 4. Нет достаточных данных → null (не угадываем) ──────────
     return null;
   }
 
