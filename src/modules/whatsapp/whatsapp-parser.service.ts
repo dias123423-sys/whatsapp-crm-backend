@@ -106,7 +106,8 @@ export class WhatsAppParserService {
       );
 
       // ═══════════════════════════════════════════════
-      // КОНТЕКСТНЫЙ АНАЛИЗ: собираем ВСЕ сообщения за последние 24ч
+      // CONTEXT LAYER: анализируем диалог с direction
+      // Собираем сообщения с direction INCOMING/OUTGOING
       // ═══════════════════════════════════════════════
       const conversationMessages = await this.prisma.message.findMany({
         where: {
@@ -116,7 +117,7 @@ export class WhatsAppParserService {
         orderBy: { createdAt: 'asc' },
       });
 
-      // Объединяем все сообщения в единый контекст
+      // Объединяем все INCOMING сообщения в единый контекст для старого parser
       const fullConversation = conversationMessages
         .map((m) => m.message)
         .join('\n') + '\n' + messageText;
@@ -130,8 +131,11 @@ export class WhatsAppParserService {
       const contextPrice = this.extractPrice(fullConversation);
       const contextOffer = await this.matchOffer(fullConversation, contextPrice?.price);
 
-      // НОВЫЙ СЛОЙ: определяем botResult из полного диалога
-      const botResult = this.determineBotResult(fullConversation);
+      // ─────────────────────────────────────────────────
+      // НОВЫЙ СЛОЙ: определяем botResult через direction-based анализ
+      // Передаём Messages с direction для понимания кто что написал
+      // ─────────────────────────────────────────────────
+      const botResult = this.determineBotResult(fullConversation, conversationMessages, messageText);
 
       const updateData: any = {
         // Всегда дополняем историю сообщений (не заменяем)
@@ -216,9 +220,9 @@ export class WhatsAppParserService {
     const period = this.determinePeriod();
 
     // ─────────────────────────────────────────────────
-    // STEP 6: Determine Bot Result from message
+    // STEP 6: Determine Bot Result from message (новый лид — только из текущего сообщения)
     // ─────────────────────────────────────────────────
-    const botResult = this.determineBotResult(messageText);
+    const botResult = this.determineBotResult(messageText, [], messageText);
 
     // ─────────────────────────────────────────────────
     // STEP 7: Create Lead — ALWAYS (even if no procedure)
@@ -489,223 +493,297 @@ export class WhatsAppParserService {
   }
 
   // ═══════════════════════════════════════════════
-  // BOT RESULT DETECTOR (context-aware, no AI)
+  // CONTEXT + INTENT LAYER (rule-based, no AI)
   // ═══════════════════════════════════════════════
 
   /**
-   * Определяет результат диалога по ВСЕМУ контексту диалога.
+   * Определяет тип сообщения бота (intent).
+   *
+   * BOOKING_REQUEST   — бот спрашивает о записи
+   * PRICE_QUESTION    — бот уточняет цену
+   * DATE_QUESTION     — бот спрашивает удобную дату
+   * TIME_QUESTION     — бот спрашивает удобное время
+   * GENERAL_INFO      — информационное сообщение, не вопрос
+   * UNKNOWN           — не определено
+   */
+  private detectBotIntent(
+    botMessage: string,
+  ): 'BOOKING_REQUEST' | 'PRICE_QUESTION' | 'DATE_QUESTION' | 'TIME_QUESTION' | 'GENERAL_INFO' | 'UNKNOWN' {
+    const t = botMessage.toLowerCase().replace(/ё/g, 'е');
+
+    // BOOKING_REQUEST — бот явно спрашивает про запись
+    if (
+      /жазай[ыи]н\s*ба|жазай[ыи]қ\s*па|жазып\s*қояй[ыи]н|сізді\s*жаза|жазаберей[ыи]н/.test(t) ||
+      /записат[ьь]\s+вас|хотите\s+записаться|записываем\s+вас|записать\s+на|записать\s+вас/.test(t) ||
+      /жазылғыңыз|жазылайын|жазылай[ыи]қ/.test(t)
+    ) {
+      return 'BOOKING_REQUEST';
+    }
+
+    // PRICE_QUESTION — бот уточняет цену
+    if (
+      /бағасы|баға|цена|стоимость|теңге|тенге|сколько\s+стоит|тг\./.test(t) &&
+      /\?|ма\?|ме\?|па\?|ба\?/.test(t)
+    ) {
+      return 'PRICE_QUESTION';
+    }
+
+    // DATE_QUESTION — бот спрашивает дату
+    if (
+      /қай\s+(күн|күні)|какой\s+день|когда\s+вам|удобн[аы][ей]?\s+дат|қашан/.test(t)
+    ) {
+      return 'DATE_QUESTION';
+    }
+
+    // TIME_QUESTION — бот спрашивает время
+    if (
+      /қай\s+уақыт|какое\s+время|удобн[аы][ей]?\s+врем|сағат\s+неше|в\s+какое\s+время/.test(t)
+    ) {
+      return 'TIME_QUESTION';
+    }
+
+    // GENERAL_INFO — информационное
+    if (t.length > 0) return 'GENERAL_INFO';
+
+    return 'UNKNOWN';
+  }
+
+  /**
+   * ГЛАВНАЯ ФУНКЦИЯ определения botResult.
+   *
+   * Использует:
+   *   1. Messages с direction (OUTGOING = бот, INCOMING = клиент)
+   *   2. Intent последнего сообщения бота
+   *   3. Ответ клиента в этом контексте
+   *   4. Весь диалог для сильных фраз
    *
    * Принцип:
-   *   1. Смотрим последнее сообщение БОТА — о чём он спросил?
-   *   2. Смотрим ответ КЛИЕНТА — что он ответил?
-   *   3. Короткий ответ ("иа", "барам") имеет смысл ТОЛЬКО в контексте вопроса бота.
-   *
-   * BOOKED  — явное подтверждение записи
-   * LOST    — явный отказ
-   * IN_PROGRESS — всё остальное
-   *
-   * Важно:
-   *   "иа" в ответ на "запишем вас?" → BOOKED
-   *   "иа" в ответ на "цена 7000?"   → IN_PROGRESS (подтверждение цены, не записи)
-   *   "барам" без контекста записи   → IN_PROGRESS
+   *   "иа" + бот спрашивал о записи   → BOOKED
+   *   "иа" + бот спрашивал о цене     → IN_PROGRESS
+   *   "барам" + бот спрашивал о записи → BOOKED
+   *   "барам" + другой контекст        → IN_PROGRESS
    */
-  determineBotResult(fullConversation: string): 'BOOKED' | 'IN_PROGRESS' | 'LOST' {
-    if (!fullConversation || !fullConversation.trim()) return 'IN_PROGRESS';
+  determineBotResult(
+    fullConversation: string,
+    messages: Array<{ message: string; direction: string }>,
+    lastClientMessage: string,
+  ): 'BOOKED' | 'IN_PROGRESS' | 'LOST' {
+    const norm = (s: string) =>
+      s.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
 
-    // Нормализуем: убираем ё→е, казахские буквы оставляем, lowercase
-    const normalize = (s: string) =>
-      s.toLowerCase()
-        .replace(/ё/g, 'е')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-    const text = normalize(fullConversation);
-
-    // Разбиваем диалог на строки
-    const lines = text
-      .split(/\n|---/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-
-    // Последнее сообщение клиента (последняя строка)
-    const lastLine = lines[lines.length - 1] || '';
-
-    // Предпоследняя строка — скорее всего сообщение бота
-    const prevLine = lines[lines.length - 2] || '';
-
-    this.logger.debug(`🔍 lastLine: "${lastLine}" | prevLine: "${prevLine}"`);
+    const lastMsg = norm(lastClientMessage);
 
     // ─────────────────────────────────────────────────
-    // Определяем: бот спрашивал про ЗАПИСЬ?
-    // (ертеңге жазайын ба? / записать вас? / жазайық па?)
+    // 1. Сильные фразы записи — BOOKED без context
+    //    Клиент САМИ явно говорит "запишите меня"
     // ─────────────────────────────────────────────────
-    const botAskedAboutBooking = this.botLineIsBookingQuestion(prevLine) ||
-      this.conversationHasBookingQuestion(text);
+    if (this.isStrongBookingPhrase(lastMsg)) {
+      this.logger.log(`✅ BOOKED | strong_booking_phrase | "${lastMsg}"`);
+      return 'BOOKED';
+    }
 
     // ─────────────────────────────────────────────────
-    // Определяем: бот спрашивал про ЦЕНУ/СТОИМОСТЬ?
-    // (чтобы НЕ путать "иа" на вопрос о цене с BOOKED)
+    // 2. Явный отказ — LOST
     // ─────────────────────────────────────────────────
-    const botAskedAboutPrice = this.botLineIsPriceQuestion(prevLine);
-
-    // ─────────────────────────────────────────────────
-    // LOST: Явный отказ — проверяем первым
-    // ─────────────────────────────────────────────────
-    if (this.isLostResponse(lastLine, text)) {
-      this.logger.debug(`❌ LOST detected`);
+    if (this.isLostResponse(lastMsg)) {
+      this.logger.log(`❌ LOST | explicit_refusal | "${lastMsg}"`);
       return 'LOST';
     }
 
     // ─────────────────────────────────────────────────
-    // BOOKED: Явное подтверждение записи
+    // 3. Явный IN_PROGRESS — клиент думает/откладывает
     // ─────────────────────────────────────────────────
-
-    // A) Сильные фразы записи — BOOKED без контекста
-    if (this.isStrongBookingPhrase(lastLine)) {
-      this.logger.debug(`✅ BOOKED by strong phrase`);
-      return 'BOOKED';
+    if (this.isInProgressResponse(lastMsg)) {
+      this.logger.log(`⏳ IN_PROGRESS | thinking_response | "${lastMsg}"`);
+      return 'IN_PROGRESS';
     }
 
-    // B) Слабые согласия ("иа", "ок", "барам") — только если бот спрашивал про запись
-    //    НО не если бот спрашивал про цену
-    if (botAskedAboutBooking && !botAskedAboutPrice) {
-      if (this.isWeakAgreement(lastLine)) {
-        this.logger.debug(`✅ BOOKED by weak agreement in booking context`);
-        return 'BOOKED';
+    // ─────────────────────────────────────────────────
+    // 4. Intent-based анализ:
+    //    Находим последнее OUTGOING сообщение (бота)
+    //    Определяем его intent
+    //    Интерпретируем ответ клиента в этом контексте
+    // ─────────────────────────────────────────────────
+    if (messages.length > 0) {
+      // Ищем последнее OUTGOING сообщение перед текущим ответом клиента
+      const outgoingMessages = messages.filter((m) => m.direction === 'OUTGOING');
+      const lastBotMessage = outgoingMessages[outgoingMessages.length - 1]?.message ?? '';
+
+      if (lastBotMessage) {
+        const intent = this.detectBotIntent(lastBotMessage);
+
+        this.logger.log(
+          `🔍 Intent: ${intent} | botMsg: "${lastBotMessage.slice(0, 60)}" | clientReply: "${lastMsg}"`,
+        );
+
+        if (intent === 'BOOKING_REQUEST') {
+          // Бот спрашивал о записи
+          if (this.isWeakAgreement(lastMsg)) {
+            this.logger.log(`✅ BOOKED | weak_agreement + BOOKING_REQUEST | "${lastMsg}"`);
+            return 'BOOKED';
+          }
+          // Клиент назвал дату/время в ответ на вопрос о записи → BOOKED
+          if (this.hasDateTime(lastMsg)) {
+            this.logger.log(`✅ BOOKED | datetime_reply + BOOKING_REQUEST | "${lastMsg}"`);
+            return 'BOOKED';
+          }
+        }
+
+        if (intent === 'PRICE_QUESTION') {
+          // "иа" в ответ на вопрос о цене → НЕ BOOKED
+          if (this.isWeakAgreement(lastMsg)) {
+            this.logger.log(`⏳ IN_PROGRESS | weak_agreement + PRICE_QUESTION | "${lastMsg}"`);
+            return 'IN_PROGRESS';
+          }
+        }
+
+        if (intent === 'DATE_QUESTION' || intent === 'TIME_QUESTION') {
+          // Клиент назвал дату/время в ответ на соответствующий вопрос
+          if (this.hasDateTime(lastMsg) || lastMsg.match(/\d/)) {
+            this.logger.log(`⏳ IN_PROGRESS | date_or_time_reply | "${lastMsg}" — ждём финального подтверждения`);
+            return 'IN_PROGRESS';
+          }
+        }
       }
     }
 
-    // C) Мягкое согласие + конкретная дата/время = BOOKED
-    if (this.isSoftAgreement(lastLine) && this.hasDateTime(text)) {
-      this.logger.debug(`✅ BOOKED by soft agreement + datetime`);
+    // ─────────────────────────────────────────────────
+    // 5. Fallback: смягчённое согласие + datetime в ПОЛНОМ диалоге
+    // ─────────────────────────────────────────────────
+    const fullText = norm(fullConversation);
+    if (this.isSoftAgreement(lastMsg) && this.hasDateTime(fullText)) {
+      this.logger.log(`✅ BOOKED | soft_agreement + datetime_in_context | "${lastMsg}"`);
       return 'BOOKED';
     }
 
     // ─────────────────────────────────────────────────
-    // IN_PROGRESS: всё остальное
+    // 6. По умолчанию — IN_PROGRESS
     // ─────────────────────────────────────────────────
-    this.logger.debug(`⏳ IN_PROGRESS`);
+    this.logger.log(`⏳ IN_PROGRESS | default | "${lastMsg}"`);
     return 'IN_PROGRESS';
   }
 
   // ─────────────────────────────────────────────────
-  // HELPERS для determineBotResult
+  // PATTERN HELPERS
   // ─────────────────────────────────────────────────
 
-  /** Бот в данной строке спрашивает про запись? */
-  private botLineIsBookingQuestion(line: string): boolean {
-    // Казахский: "жазайын ба?", "жазайық па?", "жазып қояйын ба?"
-    // Русский: "записать вас?", "записываем?", "хотите записаться?"
-    return /жазай[ыи]н\s*ба|жазай[ыи]қ\s*па|жазып\s*қояй[ыи]н|жазып\s*қо[йй]ай[ыи]н/.test(line) ||
-      /запис[ауе]|записыва|хотите\s+записаться|записать\s+вас|записываем\s+вас/.test(line);
-  }
-
-  /** В диалоге ВООБЩЕ был вопрос про запись? */
-  private conversationHasBookingQuestion(fullText: string): boolean {
-    return /жазай[ыи]н\s*ба|жазай[ыи]қ\s*па|жазып\s*қояй[ыи]н/.test(fullText) ||
-      /записат[ьь]\s+вас|хотите\s+записаться|записываем\s+вас|записать\s+на/.test(fullText);
-  }
-
-  /** Бот спрашивает про цену? */
-  private botLineIsPriceQuestion(line: string): boolean {
-    return /бағасы|бага|сколько\s+стоит|цена|стоимость|теңге|тenge|тг/.test(line);
-  }
-
-  /** Явный LOST ответ */
-  private isLostResponse(lastLine: string, fullText: string): boolean {
-    // Казахский — точные совпадения коротких слов
-    const kzLostExact = [
-      'жоқ', 'жок', 'бармаймын', 'бармайм', 'бармаим', 'бармай',
-      'келмеймін', 'келмейм', 'келмим', 'керек емес', 'керек жоқ',
-      'қымбат', 'қымбат екен', 'ойымнан қайттым', 'қаламаймын',
+  /**
+   * Сильные фразы записи — BOOKED независимо от контекста.
+   * Клиент явно говорит "запишите меня", "записываюсь" и т.д.
+   */
+  private isStrongBookingPhrase(line: string): boolean {
+    const phrases = [
+      // Казахский — явные фразы записи
+      'жазып қойыңыз', 'жазып коюыныз', 'жазып койыныз', 'жазып қойыныз',
+      'жазып алыңыз',  'жазып алыныз',  'жазылдым',
+      'жазып қой',     'жазып кой',
+      // Казахский — "барамын/келемін" только как самостоятельное подтверждение
+      'барамын, жаз',  'келемін, жаз',  'барамын жаз',
+      // Смешанный
+      'иа, жазып', 'иә, жазып', 'да, жазып', 'ия, жазып',
+      'да, запишите', 'барамын, запишите', 'келемін, запишите',
+      // Русский
+      'запишите меня',  'запишите на',    'записывайте',
+      'записываюсь',    'я записываюсь',  'подтверждаю запись',
+      'приеду на',      'я приду',        'приду в',
+      'приеду в',       'буду завтра',    'буду сегодня',
     ];
-    for (const phrase of kzLostExact) {
-      if (lastLine.includes(phrase)) return true;
+    for (const p of phrases) {
+      if (line.includes(p)) return true;
     }
+    return false;
+  }
 
-    // Русский — фразы отказа
-    const ruLostPhrases = [
+  /**
+   * Слабые согласия — BOOKED только если бот спрашивал о записи (BOOKING_REQUEST).
+   * "иа", "ок", "барам", "болады" и т.д.
+   */
+  private isWeakAgreement(line: string): boolean {
+    const trimmed = line.trim().replace(/[,.!?]$/, '');
+
+    // Точные короткие ответы (казахский + русский + смешанный)
+    const exactMatches = [
+      'иа', 'иә', 'ия', 'иаа', 'ха',
+      'барам', 'барамын', 'келем', 'келемін', 'келемн',
+      'болады', 'бола берсін', 'жарайды', 'мақұл',
+      'ок', 'окей', 'ok', 'okay',
+      'хорошо', 'давайте', 'ладно', 'согласна', 'согласен',
+    ];
+    if (exactMatches.includes(trimmed)) return true;
+
+    // Комбинации: "иа болады", "иа жарайды", "барам жарайды"
+    if (/^(иа|иә|ия)\s+(болады|жарайды|мақұл|барам|келем|ок|хорошо|ладно)/.test(trimmed)) return true;
+    if (/^(барам|келем)(ын|ін)?\s+(жарайды|болады|мақұл|ок)/.test(trimmed)) return true;
+
+    return false;
+  }
+
+  /** Мягкое согласие — для комбинации с datetime */
+  private isSoftAgreement(line: string): boolean {
+    return /\b(да|давайте|хорошо|ок|окей|ладно|подходит|согласна|согласен|мақұл|иә|болады|жарайды|иа|барам|келем)\b/.test(line);
+  }
+
+  /** Явный отказ */
+  private isLostResponse(line: string): boolean {
+    // Казахский — точные совпадения
+    const kzLost = [
+      'жоқ', 'жок',
+      'бармаймын', 'бармайм', 'бармаим', 'бармай',
+      'келмеймін', 'келмейм', 'келмим',
+      'керек емес', 'керек жоқ', 'керек жок',
+      'қымбат', 'қымбат екен', 'кымбат', 'кымбат екен',
+      'ойымнан қайттым', 'ойымнан кайттым',
+      'қаламаймын', 'каламаймын',
+      'жоқ, керек емес',
+    ];
+    // Русский
+    const ruLost = [
       'не буду', 'не хочу', 'не приду', 'не актуально', 'отказываюсь',
       'передумала', 'передумал', 'не интересно', 'не нужно', 'не надо',
       'спасибо не надо', 'спасибо, не надо', 'не подходит', 'мне не подходит',
       'запишусь в другом', 'в другом месте', 'дорого', 'слишком дорого',
       'дороговато', 'нет, дорого', 'это дорого', 'нет спасибо',
     ];
-    for (const phrase of ruLostPhrases) {
-      if (lastLine.includes(phrase) || fullText.includes(phrase)) return true;
+    for (const p of [...kzLost, ...ruLost]) {
+      if (line.includes(p)) return true;
     }
-
     return false;
   }
 
-  /**
-   * Сильные фразы записи — BOOKED независимо от контекста бота.
-   * Клиент сам явно говорит "запишите меня", "записываюсь" и т.д.
-   */
-  private isStrongBookingPhrase(line: string): boolean {
-    const strong = [
+  /** Явный IN_PROGRESS — клиент думает или откладывает */
+  private isInProgressResponse(line: string): boolean {
+    const patterns = [
+      // Казахский
+      'ойланам', 'ойланайын', 'ойланып алайын',
+      'кейін', 'кейин', 'кейін айтам', 'кейин айтам',
+      'кейін жазам', 'кейин жазам',
+      'білмеймін', 'білмим', 'билмеймін',
+      'әзірге жоқ', 'азірге жоқ',
+      'ақылдасам', 'ақылдасып алайын', 'акылдасам',
       // Русский
-      'запишите меня', 'запишите на', 'записывайте', 'записываюсь',
-      'я записываюсь', 'подтверждаю запись', 'приеду на', 'я приду',
-      'приду в', 'приеду в', 'буду завтра', 'буду сегодня',
-      // Казахский — явные фразы записи
-      'жазып қойыңыз', 'жазып коюыныз', 'жазып койыныз', 'жазып қойыныз',
-      'жазып алыңыз', 'жазылдым', 'жазып қой', 'жазып кой',
-      'барамын', 'келемін',
-      // Смешанный
-      'иа, жазып', 'иә, жазып', 'да, жазып', 'да, запишите',
-      'барамын, запишите', 'келемін, запишите',
+      'я подумаю', 'подумаю', 'надо подумать', 'надо подумать',
+      'позже', 'потом', 'позже напишу', 'позже скажу',
+      'ещё не знаю', 'не знаю', 'подумаем',
     ];
-    for (const phrase of strong) {
-      if (line.includes(phrase)) return true;
+    for (const p of patterns) {
+      if (line.includes(p)) return true;
     }
     return false;
   }
 
-  /**
-   * Слабые согласия — BOOKED только если бот спрашивал про запись.
-   * "иа", "ок", "барам", "болады" и т.д.
-   */
-  private isWeakAgreement(line: string): boolean {
-    // Казахский — короткие согласия
-    const kzWeak = [
-      'иа', 'иә', 'ия', 'иаа', 'ха',
-      'барам', 'барамын', 'келем', 'келемін', 'келемн',
-      'болады', 'бола берсін', 'жарайды', 'мақұл',
-    ];
-    // Русский/универсальный
-    const ruWeak = ['ок', 'окей', 'ok', 'okay', 'хорошо', 'давайте', 'ладно'];
-
-    const trimmed = line.trim();
-
-    // Точное совпадение (короткий ответ)
-    for (const w of [...kzWeak, ...ruWeak]) {
-      if (trimmed === w || trimmed === w + ',' || trimmed.startsWith(w + ' ')) return true;
-    }
-
-    // "иа болады", "иа жарайды" и т.д.
-    if (/^(иа|иә|ия)\s+(болады|жарайды|мақұл|барам|келем|ок)/.test(trimmed)) return true;
-
-    return false;
-  }
-
-  /** Мягкое согласие (для комбинации с датой/временем) */
-  private isSoftAgreement(line: string): boolean {
-    return /\b(да|давайте|хорошо|ок|окей|ладно|подходит|согласна|согласен|мақұл|иә|болады|жарайды)\b/.test(line);
-  }
-
-  /** Есть ли в тексте конкретная дата или время? */
+  /** Есть ли конкретная дата или время в тексте? */
   private hasDateTime(text: string): boolean {
     return (
-      // Казахский: ертең, ертен, бүгін, бугин + дни недели
-      /\b(ертең|ертен|ертеңге|ертенге|бүгін|бугин|бугинге|жұма|сенбі|дүйсенбі|сейсенбі|сәрсенбі|бейсенбі)\b/.test(text) ||
+      // Казахский: ертең, ертен, бүгін + дни недели
+      /\b(ертең|ертен|ертеңге|ертенге|бүгін|бугін|бугин|жұма|сенбі|дүйсенбі|сейсенбі|сәрсенбі|бейсенбі)\b/.test(text) ||
       // Русский: завтра, сегодня + дни недели
-      /\b(завтра|послезавтра|сегодня|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\b/.test(text) ||
-      // Время: "в 16:00", "в 16", "4те", "4-те", "сағат 4", "16"
+      /\b(завтра|послезавтра|сегодня|понедельник|вторник|среду|среда|четверг|пятницу|пятница|субботу|суббота|воскресенье)\b/.test(text) ||
+      // Время: "в 16:00", "в 16", "16:00", "4те", "4-те", "сағат 4"
       /в\s+\d{1,2}(:\d{2})?/.test(text) ||
+      /\b\d{1,2}:\d{2}\b/.test(text) ||
       /\b\d{1,2}(:\d{2})?\s*(те|де|да|та)\b/.test(text) ||
       /сағат\s+\d/.test(text) ||
-      // Дата: "15 августа"
+      // Дата: "15 августа", "15-го"
       /\b\d{1,2}[\s-](января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\b/.test(text)
     );
   }
