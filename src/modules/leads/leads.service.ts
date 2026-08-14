@@ -55,6 +55,7 @@ export class LeadsService {
     search?: string,
     whatsappAccountId?: string,
     whatsappOwnerId?: string,
+    botResult?: string,
   ) {
     const skip = (page - 1) * limit;
 
@@ -69,6 +70,7 @@ export class LeadsService {
     if (period) where.period = period;
     if (whatsappAccountId) where.whatsappAccountId = whatsappAccountId;
     if (whatsappOwnerId) where.whatsappOwnerId = whatsappOwnerId;
+    if (botResult) where.botResult = botResult;
 
     if (search) {
       where.OR = [

@@ -46,6 +46,7 @@ export class LeadsController {
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'whatsappAccountId', required: false, type: String })
   @ApiQuery({ name: 'whatsappOwnerId', required: false, type: String })
+  @ApiQuery({ name: 'botResult', required: false, enum: ['BOOKED', 'IN_PROGRESS', 'LOST'] })
   findAll(
     @CurrentUser() currentUser: any,
     @Query('page') page?: string,
@@ -56,6 +57,7 @@ export class LeadsController {
     @Query('search') search?: string,
     @Query('whatsappAccountId') whatsappAccountId?: string,
     @Query('whatsappOwnerId') whatsappOwnerId?: string,
+    @Query('botResult') botResult?: string,
   ) {
     // Оператор видит только свои лиды
     let effectiveOperatorId = operatorId;
@@ -75,6 +77,7 @@ export class LeadsController {
       search,
       whatsappAccountId,
       whatsappOwnerId,
+      botResult,
     );
   }
 

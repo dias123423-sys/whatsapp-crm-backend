@@ -125,10 +125,10 @@ export class ExcelService {
     ws.properties.defaultRowHeight = 18;
 
     // ── Header block ──
-    const COLS = 16; // количество колонок (A–P)
-    const colRange = `A1:P1`;
+    const COLS = 18; // количество колонок (A–R)
+    const colRange = `A1:R1`;
 
-    ws.mergeCells(`A1:P1`);
+    ws.mergeCells(`A1:R1`);
     const titleCell = ws.getCell('A1');
     titleCell.value = title;
     titleCell.font = { size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -136,7 +136,7 @@ export class ExcelService {
     titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1D6F42' } };
     ws.getRow(1).height = 30;
 
-    ws.mergeCells('A2:P2');
+    ws.mergeCells('A2:R2');
     ws.getCell('A2').value = `Дата формирования: ${new Date().toLocaleString('ru-RU', {
       timeZone: process.env.APP_TIMEZONE || 'Asia/Almaty',
     })}`;
@@ -144,7 +144,7 @@ export class ExcelService {
     ws.getRow(2).height = 18;
 
     if (period) {
-      ws.mergeCells('A3:P3');
+      ws.mergeCells('A3:R3');
       ws.getCell('A3').value = `Период: ${period}`;
       ws.getCell('A3').alignment = { horizontal: 'center' };
       ws.getRow(3).height = 16;
@@ -166,6 +166,7 @@ export class ExcelService {
       { key: 'owner',        header: 'Владелец WA',      width: 14 },
       { key: 'operator',     header: 'Оператор',         width: 18 },
       { key: 'status',       header: 'Статус',           width: 14 },
+      { key: 'botResult',    header: 'Результат',        width: 14 },
       { key: 'source',       header: 'Источник',         width: 14 },
       { key: 'campaign',     header: 'Campaign',         width: 18 },
       { key: 'adId',         header: 'Ad ID',            width: 16 },
@@ -178,7 +179,7 @@ export class ExcelService {
     const headers = [
       '№','Дата','Время','Телефон','Имя','Процедура',
       'Цена','Валюта','WhatsApp','Владелец WA','Оператор',
-      'Статус','Источник','Campaign','Ad ID','Оригинальное сообщение',
+      'Статус','Результат','Источник','Campaign','Ad ID','Оригинальное сообщение',
     ];
     headers.forEach((h, i) => {
       const cell = headerRow.getCell(i + 1);
@@ -199,7 +200,7 @@ export class ExcelService {
     // Auto filter
     ws.autoFilter = {
       from: { row: dataStartRow, column: 1 },
-      to: { row: dataStartRow, column: 16 },
+      to: { row: dataStartRow, column: 17 },
     };
 
     // ── Data rows ──
@@ -215,6 +216,14 @@ export class ExcelService {
 
       const priceNum: number | null = lead.parsedPrice ?? lead.offer?.price ?? null;
 
+      // Bot Result labels
+      const resultLabels: Record<string, string> = {
+        BOOKED: '✅ Записался',
+        IN_PROGRESS: '⏳ В процессе',
+        LOST: '❌ Слив',
+      };
+      const botResultText = lead.botResult ? resultLabels[lead.botResult] : '—';
+
       const row = ws.addRow([
         index + 1,
         createdAt.toLocaleDateString('ru-RU', { timeZone: tz }),
@@ -228,6 +237,7 @@ export class ExcelService {
         lead.whatsappOwner?.name || '—',
         lead.operator?.user?.name || '—',
         STATUS_LABELS[lead.status] || lead.status,
+        botResultText,
         lead.source || '—',
         lead.campaign || '—',
         lead.adId || '—',
@@ -256,6 +266,20 @@ export class ExcelService {
           break;
         case 'CLOSED':
           statusCell.font = { color: { argb: 'FF7F7F7F' } };
+          break;
+      }
+
+      // Цвет bot result
+      const resultCell = row.getCell(13);
+      switch (lead.botResult) {
+        case 'BOOKED':
+          resultCell.font = { color: { argb: 'FF00B050' }, bold: true };
+          break;
+        case 'IN_PROGRESS':
+          resultCell.font = { color: { argb: 'FF0070C0' }, bold: true };
+          break;
+        case 'LOST':
+          resultCell.font = { color: { argb: 'FFD00000' }, bold: true };
           break;
       }
 
@@ -296,6 +320,17 @@ export class ExcelService {
     revCell.value = `Записано: ${booked.length} | Выручка: ${fmtKZT(revenue)}`;
     revCell.font = { bold: true, size: 11, color: { argb: 'FF00B050' } };
     revCell.alignment = { horizontal: 'center' };
+
+    // Bot Result stats
+    const botBooked = leads.filter((l) => l.botResult === 'BOOKED').length;
+    const botInProgress = leads.filter((l) => l.botResult === 'IN_PROGRESS').length;
+    const botLost = leads.filter((l) => l.botResult === 'LOST').length;
+    const sumBotRow = summaryRowNum + 2;
+    ws.mergeCells(`A${sumBotRow}:H${sumBotRow}`);
+    const botCell = ws.getCell(`A${sumBotRow}`);
+    botCell.value = `Результат: ✅ Записался ${botBooked} | ⏳ В процессе ${botInProgress} | ❌ Слив ${botLost}`;
+    botCell.font = { bold: true, size: 11 };
+    botCell.alignment = { horizontal: 'center' };
 
     return ws;
   }

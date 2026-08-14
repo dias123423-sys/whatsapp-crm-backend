@@ -33,6 +33,13 @@ export class ReportsController {
     return this.reportsService.getReportStats();
   }
 
+  /** GET /reports/whatsapp-stats — детальная статистика по каждому WhatsApp */
+  @Get('whatsapp-stats')
+  @ApiOperation({ summary: 'Per-WhatsApp detailed stats with procedure breakdown' })
+  getWhatsAppStats() {
+    return this.reportsService.getWhatsAppStats();
+  }
+
   // ─────────────────────────────────────────────
   // GENERATE (POST)
   // ─────────────────────────────────────────────
@@ -76,7 +83,7 @@ export class ReportsController {
   }
 
   @Post('owner/:ownerId')
-  @ApiOperation({ summary: 'Generate report for specific WhatsApp owner (Танат/Улдай)' })
+  @ApiOperation({ summary: 'Generate report for specific WhatsApp owner' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
   generateOwner(
@@ -91,57 +98,117 @@ export class ReportsController {
     );
   }
 
+  /** POST /reports/whatsapp-account/:accountId — Excel по конкретному WhatsApp аккаунту */
+  @Post('whatsapp-account/:accountId')
+  @ApiOperation({ summary: 'Generate Excel for specific WhatsApp account' })
+  @ApiQuery({ name: 'hasProcedure', required: false, type: Boolean })
+  @ApiQuery({ name: 'startDate',    required: false, type: String })
+  @ApiQuery({ name: 'endDate',      required: false, type: String })
+  generateByWhatsApp(
+    @Param('accountId') accountId: string,
+    @Query('hasProcedure') hasProcedure?: string,
+    @Query('startDate')    startDate?: string,
+    @Query('endDate')      endDate?: string,
+  ) {
+    const hp = hasProcedure === 'true'
+      ? true
+      : hasProcedure === 'false'
+      ? false
+      : undefined;
+
+    return this.reportsService.generateWhatsAppReport(
+      accountId,
+      hp,
+      startDate ? new Date(startDate) : undefined,
+      endDate   ? new Date(endDate)   : undefined,
+    );
+  }
+
+  /** POST /reports/filter — Excel по фильтру hasProcedure */
+  @Post('filter')
+  @ApiOperation({ summary: 'Generate Excel filtered by hasProcedure' })
+  @ApiQuery({ name: 'hasProcedure', required: true,  type: Boolean })
+  @ApiQuery({ name: 'startDate',    required: false, type: String })
+  @ApiQuery({ name: 'endDate',      required: false, type: String })
+  generateFiltered(
+    @Query('hasProcedure') hasProcedure: string,
+    @Query('startDate')    startDate?: string,
+    @Query('endDate')      endDate?: string,
+  ) {
+    return this.reportsService.generateProcedureFilterReport(
+      hasProcedure === 'true',
+      startDate ? new Date(startDate) : undefined,
+      endDate   ? new Date(endDate)   : undefined,
+    );
+  }
+
   // ─────────────────────────────────────────────
-  // EXCEL DOWNLOAD (GET) — called by frontend
+  // EXCEL DOWNLOAD (GET)
   // ─────────────────────────────────────────────
 
   /**
-   * GET /reports/excel?period=today|yesterday|night|day|week|month|custom
-   * Returns Excel file as binary response.
+   * GET /reports/excel
+   * ?period=today|yesterday|night|day|custom|with_procedure|without_procedure
+   * &dateFrom=  &dateTo=
+   * &whatsappOwnerId=   (фильтр по владельцу WA)
+   * &whatsappAccountId= (фильтр по аккаунту WA)
+   * &hasProcedure=true|false
    */
   @Get('excel')
-  @ApiOperation({ summary: 'Download Excel for period (Admin only)' })
-  @ApiQuery({ name: 'period', required: true, type: String })
-  @ApiQuery({ name: 'dateFrom', required: false, type: String })
-  @ApiQuery({ name: 'dateTo', required: false, type: String })
-  @ApiQuery({ name: 'whatsappOwnerId', required: false, type: String })
+  @ApiOperation({ summary: 'Download Excel (Admin only)' })
+  @ApiQuery({ name: 'period',            required: false, type: String })
+  @ApiQuery({ name: 'dateFrom',          required: false, type: String })
+  @ApiQuery({ name: 'dateTo',            required: false, type: String })
+  @ApiQuery({ name: 'whatsappOwnerId',   required: false, type: String })
+  @ApiQuery({ name: 'whatsappAccountId', required: false, type: String })
+  @ApiQuery({ name: 'hasProcedure',      required: false, type: String })
   async downloadExcel(
-    @Query('period') period: string,
-    @Query('dateFrom') dateFrom: string | undefined,
-    @Query('dateTo') dateTo: string | undefined,
-    @Query('whatsappOwnerId') whatsappOwnerId: string | undefined,
+    @Query('period')            period: string | undefined,
+    @Query('dateFrom')          dateFrom: string | undefined,
+    @Query('dateTo')            dateTo: string | undefined,
+    @Query('whatsappOwnerId')   whatsappOwnerId: string | undefined,
+    @Query('whatsappAccountId') whatsappAccountId: string | undefined,
+    @Query('hasProcedure')      hasProcedureStr: string | undefined,
     @Res() res: Response,
   ) {
     let result: { filename: string };
 
-    if (whatsappOwnerId) {
+    const hasProcedure =
+      hasProcedureStr === 'true'  ? true  :
+      hasProcedureStr === 'false' ? false : undefined;
+
+    if (whatsappAccountId) {
+      result = await this.reportsService.generateWhatsAppReport(
+        whatsappAccountId,
+        hasProcedure,
+        dateFrom ? new Date(dateFrom) : undefined,
+        dateTo   ? new Date(dateTo)   : undefined,
+      );
+    } else if (whatsappOwnerId) {
       result = await this.reportsService.generateOwnerReport(
         whatsappOwnerId,
         dateFrom ? new Date(dateFrom) : undefined,
-        dateTo ? new Date(dateTo) : undefined,
+        dateTo   ? new Date(dateTo)   : undefined,
+      );
+    } else if (hasProcedure !== undefined && !period) {
+      result = await this.reportsService.generateProcedureFilterReport(
+        hasProcedure,
+        dateFrom ? new Date(dateFrom) : undefined,
+        dateTo   ? new Date(dateTo)   : undefined,
       );
     } else {
       switch (period) {
-        case 'today':
-          result = await this.reportsService.generateTodayReport();
-          break;
-        case 'yesterday':
-          result = await this.reportsService.generateYesterdayReport();
-          break;
-        case 'night':
-          result = await this.reportsService.generateNightReport();
-          break;
-        case 'day':
-          result = await this.reportsService.generateDayReport();
-          break;
+        case 'today':     result = await this.reportsService.generateTodayReport();     break;
+        case 'yesterday': result = await this.reportsService.generateYesterdayReport(); break;
+        case 'night':     result = await this.reportsService.generateNightReport();     break;
+        case 'day':       result = await this.reportsService.generateDayReport();       break;
         case 'custom':
           if (!dateFrom || !dateTo) {
-            res.status(400).json({ message: 'dateFrom and dateTo required for custom period' });
+            res.status(400).json({ message: 'dateFrom and dateTo required' });
             return;
           }
           result = await this.reportsService.generateCustomReport(
-            new Date(dateFrom),
-            new Date(dateTo),
+            new Date(dateFrom), new Date(dateTo),
           );
           break;
         default:
@@ -155,14 +222,8 @@ export class ReportsController {
       return;
     }
 
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${result.filename}"`,
-    );
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.sendFile(path.resolve(filepath));
   }
 

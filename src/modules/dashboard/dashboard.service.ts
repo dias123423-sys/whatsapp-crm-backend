@@ -47,6 +47,9 @@ export class DashboardService {
       followUpLeads,
       noAnswerLeads,
       closedLeads,
+      bookedResult,
+      inProgressResult,
+      lostResult,
     ] = await Promise.all([
       this.prisma.lead.count(),
       this.prisma.lead.count({ where: { createdAt: { gte: todayStart } } }),
@@ -57,6 +60,9 @@ export class DashboardService {
       this.prisma.lead.count({ where: { status: LeadStatus.FOLLOW_UP } }),
       this.prisma.lead.count({ where: { status: LeadStatus.NO_ANSWER } }),
       this.prisma.lead.count({ where: { status: LeadStatus.CLOSED } }),
+      this.prisma.lead.count({ where: { botResult: 'BOOKED' } }),
+      this.prisma.lead.count({ where: { botResult: 'IN_PROGRESS' } }),
+      this.prisma.lead.count({ where: { botResult: 'LOST' } }),
     ]);
 
     const inProgress = assignedLeads + callingLeads;
@@ -139,6 +145,10 @@ export class DashboardService {
       followUpLeads,
       noAnswerLeads,
       closedLeads,
+      // Bot result stats
+      botResultBooked: bookedResult,
+      botResultInProgress: inProgressResult,
+      botResultLost: lostResult,
       whatsappStats,
       procedureStats,
       operatorStats,

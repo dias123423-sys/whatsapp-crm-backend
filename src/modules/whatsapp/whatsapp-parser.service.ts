@@ -85,42 +85,86 @@ export class WhatsAppParserService {
     });
 
     // ─────────────────────────────────────────────────
-    // STEP 2.5: Check for existing ACTIVE lead for this client
-    // ПРАВИЛО: один активный лид на клиента — не создавать дубликаты
+    // STEP 2.5: Check for RECENT lead from same client (last 24h)
+    // ПРАВИЛО: Если клиент писал недавно (менее 24ч назад) — ОБНОВЛЯЕМ существующий лид.
+    // Если клиент пишет через несколько дней — создаём НОВЫЙ лид.
     // Активные статусы: NEW, ASSIGNED, CALLING, FOLLOW_UP
     // ─────────────────────────────────────────────────
-    const existingActiveLead = await this.prisma.lead.findFirst({
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentActiveLead = await this.prisma.lead.findFirst({
       where: {
         clientId: client.id,
         status: { in: ['NEW', 'ASSIGNED', 'CALLING', 'FOLLOW_UP'] },
+        createdAt: { gte: oneDayAgo }, // только за последние 24ч
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    if (existingActiveLead) {
+    if (recentActiveLead) {
       this.logger.log(
-        `♻️  Client ${phone} already has active lead ${existingActiveLead.id} (${existingActiveLead.status}) — skipping new lead creation`,
+        `♻️  Client ${phone} has recent active lead ${recentActiveLead.id} (${recentActiveLead.status}) — updating existing lead`,
       );
 
-      // Обновляем originalMessage если новое сообщение содержит процедуру/цену
-      const offerMatch = await this.matchOffer(messageText, this.extractPrice(messageText)?.price);
+      // ═══════════════════════════════════════════════
+      // КОНТЕКСТНЫЙ АНАЛИЗ: собираем ВСЕ сообщения за последние 24ч
+      // ═══════════════════════════════════════════════
+      const conversationMessages = await this.prisma.message.findMany({
+        where: {
+          clientId: client.id,
+          createdAt: { gte: oneDayAgo },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
 
-      if (offerMatch && (!existingActiveLead.parsedPrice || existingActiveLead.parsedProcedures?.length === 0)) {
-        await this.prisma.lead.update({
-          where: { id: existingActiveLead.id },
-          data: {
-            parsedProcedures: offerMatch.procedures,
-            parsedPrice: offerMatch.price,
-            parsedCurrency: 'KZT',
-            offerId: offerMatch.offerId,
-            // Дополняем originalMessage
-            originalMessage: existingActiveLead.originalMessage
-              ? `${existingActiveLead.originalMessage}\n---\n${messageText}`
-              : messageText,
-          },
-        });
-        this.logger.log(`✅ Updated existing lead ${existingActiveLead.id} with procedure: ${offerMatch.offerName}`);
+      // Объединяем все сообщения в единый контекст
+      const fullConversation = conversationMessages
+        .map((m) => m.message)
+        .join('\n') + '\n' + messageText;
+
+      this.logger.debug(`📝 Full conversation context: ${conversationMessages.length + 1} messages`);
+
+      // Анализируем ПОЛНЫЙ контекст, а не только текущее сообщение
+      const contextPrice = this.extractPrice(fullConversation);
+      const contextOffer = await this.matchOffer(fullConversation, contextPrice?.price);
+
+      // Определяем botResult из полного диалога
+      const botResult = this.determineBotResult(fullConversation);
+
+      const updateData: any = {
+        // Всегда дополняем историю сообщений
+        originalMessage: recentActiveLead.originalMessage
+          ? `${recentActiveLead.originalMessage}\n---\n${messageText}`
+          : messageText,
+        updatedAt: new Date(),
+      };
+
+      // Обновляем процедуру ТОЛЬКО если новая найдена И (старой нет ИЛИ старая пустая)
+      if (contextOffer) {
+        if (!recentActiveLead.parsedProcedures || recentActiveLead.parsedProcedures.length === 0) {
+          updateData.parsedProcedures = contextOffer.procedures;
+          updateData.offerId = contextOffer.offerId;
+        }
+        if (!recentActiveLead.parsedPrice || recentActiveLead.parsedPrice === 0) {
+          updateData.parsedPrice = contextOffer.price;
+          updateData.parsedCurrency = 'KZT';
+        }
       }
+
+      // Обновляем botResult если он изменился
+      if (botResult && botResult !== recentActiveLead.botResult) {
+        updateData.botResult = botResult;
+        updateData.botResultUpdatedAt = new Date();
+        this.logger.log(`🎯 Bot result updated: ${recentActiveLead.botResult ?? 'NULL'} → ${botResult}`);
+      }
+
+      await this.prisma.lead.update({
+        where: { id: recentActiveLead.id },
+        data: updateData,
+      });
+
+      this.logger.log(
+        `✅ Updated lead ${recentActiveLead.id} | procedure=${contextOffer?.offerName ?? 'unchanged'} | result=${botResult ?? 'unchanged'}`,
+      );
 
       return null; // Не создаём дубликат
     }
@@ -141,7 +185,12 @@ export class WhatsAppParserService {
     const period = this.determinePeriod();
 
     // ─────────────────────────────────────────────────
-    // STEP 6: Create Lead — ALWAYS (even if no procedure)
+    // STEP 6: Determine Bot Result from message
+    // ─────────────────────────────────────────────────
+    const botResult = this.determineBotResult(messageText);
+
+    // ─────────────────────────────────────────────────
+    // STEP 7: Create Lead — ALWAYS (even if no procedure)
     // ─────────────────────────────────────────────────
     const lead = await this.prisma.lead.create({
       data: {
@@ -156,6 +205,8 @@ export class WhatsAppParserService {
         status: 'NEW',          // Admin назначает оператора вручную
         source: 'WHATSAPP',
         period,
+        botResult,
+        botResultUpdatedAt: botResult ? new Date() : undefined,
       },
       include: {
         client: true,
@@ -166,7 +217,7 @@ export class WhatsAppParserService {
     });
 
     this.logger.log(
-      `✅ Lead created: ${lead.id} | procedure=${offerMatch?.offerName ?? 'UNKNOWN'} | price=${offerMatch?.price ?? priceResult?.price ?? 'NULL'} | period=${period}`,
+      `✅ Lead created: ${lead.id} | procedure=${offerMatch?.offerName ?? 'UNKNOWN'} | price=${offerMatch?.price ?? priceResult?.price ?? 'NULL'} | result=${botResult ?? 'IN_PROGRESS'} | period=${period}`,
     );
 
     return lead;
@@ -404,5 +455,76 @@ export class WhatsAppParserService {
       digits = '7' + digits;
     }
     return '+' + digits;
+  }
+
+  // ═══════════════════════════════════════════════
+  // BOT RESULT DETECTOR (deterministic, no AI)
+  // ═══════════════════════════════════════════════
+
+  /**
+   * Определяет результат диалога по всему контексту.
+   * 
+   * BOOKED: явное согласие на запись
+   * LOST: явный отказ
+   * IN_PROGRESS: всё остальное (по умолчанию)
+   * 
+   * Приоритет:
+   * 1. BOOKED (если есть явное подтверждение)
+   * 2. LOST (если есть явный отказ)
+   * 3. IN_PROGRESS (если неопределённо)
+   */
+  determineBotResult(fullConversation: string): 'BOOKED' | 'IN_PROGRESS' | 'LOST' | null {
+    if (!fullConversation) return 'IN_PROGRESS';
+
+    const normalized = fullConversation.toLowerCase();
+
+    // ─────────────────────────────────────────────────
+    // BOOKED: Явное согласие на запись
+    // ─────────────────────────────────────────────────
+    const bookedPatterns = [
+      // Русский
+      /\b(да|давайте|хорошо|согласен|согласна|подходит|подтверждаю|запиш[иы])/i,
+      /\b(запишите\s+меня|я\s+приду|буду|записываюсь)/i,
+      /\b(запишите\s+на|записать\s+на|хочу\s+записаться\s+на)/i,
+      // Казахский
+      /\b(иә|жазып\s+қойыңыз|жазылыңыз|жазылғым\s+келеді|келемін)/i,
+      /\b(жазып\s+алыңыз|мақұл|келісемін)/i,
+    ];
+
+    for (const pattern of bookedPatterns) {
+      if (pattern.test(normalized)) {
+        // Дополнительная проверка: есть ли контекст записи?
+        // (чтобы избежать false positive на простое "да" вне контекста)
+        const hasBookingContext = /запис|хочу|можно|время|дата|завтра|сегодня|жазы/i.test(normalized);
+        if (hasBookingContext) {
+          return 'BOOKED';
+        }
+      }
+    }
+
+    // ─────────────────────────────────────────────────
+    // LOST: Явный отказ
+    // ─────────────────────────────────────────────────
+    const lostPatterns = [
+      // Русский
+      /\b(нет|не\s+буду|не\s+хочу|не\s+приду|не\s+актуально|отказываюсь)/i,
+      /\b(дорого|слишком\s+дорого|передумал|передумала|не\s+интересно)/i,
+      /\b(не\s+подходит|мне\s+не\s+подходит|запишусь\s+в\s+другом)/i,
+      /\b(спасибо\s+не\s+нужно|не\s+надо)/i,
+      // Казахский
+      /\b(жоқ|қымбат|керек\s+емес|бармаймын|қаламаймын)/i,
+      /\b(ойымнан\s+қайттым|қызықты\s+емес)/i,
+    ];
+
+    for (const pattern of lostPatterns) {
+      if (pattern.test(normalized)) {
+        return 'LOST';
+      }
+    }
+
+    // ─────────────────────────────────────────────────
+    // IN_PROGRESS: всё остальное
+    // ─────────────────────────────────────────────────
+    return 'IN_PROGRESS';
   }
 }
