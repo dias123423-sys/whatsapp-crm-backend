@@ -102,6 +102,24 @@ export class WhatsAppWebhookController {
 
     this.logger.log(`📨 Webhook event="${eventType}" instance="${instanceName}"`);
 
+    // TEMPORARY DEBUG: Log safe payload structure for messages.upsert
+    if (eventType === 'messages.upsert') {
+      const data = payload?.data ?? {};
+      const key = data?.key ?? {};
+      const msgContent = data?.message ?? {};
+      
+      this.logger.debug(`[PAYLOAD-STRUCTURE] remoteJid="${key?.remoteJid ?? 'MISSING'}" fromMe=${key?.fromMe} messageId="${key?.id ?? 'MISSING'}"`);
+      this.logger.debug(`[PAYLOAD-STRUCTURE] pushName="${data?.pushName ?? 'MISSING'}" messageType="${data?.messageType ?? 'MISSING'}"`);
+      this.logger.debug(`[PAYLOAD-STRUCTURE] message keys: ${Object.keys(msgContent).join(', ') || 'NONE'}`);
+      
+      const textSources = {
+        conversation: msgContent?.conversation,
+        extendedText: msgContent?.extendedTextMessage?.text,
+        imageCaption: msgContent?.imageMessage?.caption,
+      };
+      this.logger.debug(`[PAYLOAD-STRUCTURE] text sources: conversation=${!!textSources.conversation} extendedText=${!!textSources.extendedText} imageCaption=${!!textSources.imageCaption}`);
+    }
+
     try {
       switch (eventType) {
         case 'messages.upsert':
@@ -132,24 +150,30 @@ export class WhatsAppWebhookController {
     const data = payload?.data ?? {};
     const key = data?.key ?? {};
 
+    this.logger.debug(`[WEBHOOK-DEBUG] payload.data exists: ${!!data}, key exists: ${!!key}`);
+
     // ── Extract phone ──────────────────────────────
     const remoteJid: string = key?.remoteJid ?? '';
 
+    this.logger.debug(`[WEBHOOK-DEBUG] remoteJid="${remoteJid}"`);
+
     // Skip group messages
     if (remoteJid.includes('@g.us')) {
-      this.logger.debug('Skip: group message');
+      this.logger.debug('[EARLY RETURN] group_message: @g.us detected');
       return { status: 'ignored', reason: 'group_message' };
     }
 
     const rawPhone = remoteJid.split('@')[0];
     if (!rawPhone) {
-      this.logger.warn(`No phone in remoteJid: ${remoteJid}`);
+      this.logger.warn(`[EARLY RETURN] no_phone: remoteJid="${remoteJid}"`);
       return { status: 'ignored', reason: 'no_phone' };
     }
 
     const phone = this.normalizePhone(rawPhone);
+    this.logger.debug(`[WEBHOOK-DEBUG] rawPhone="${rawPhone}" normalized="${phone}"`);
+    
     if (!phone || phone.length < 7) {
-      this.logger.warn(`Could not normalize phone from: ${rawPhone}`);
+      this.logger.warn(`[EARLY RETURN] invalid_phone: rawPhone="${rawPhone}" normalized="${phone}"`);
       return { status: 'ignored', reason: 'invalid_phone' };
     }
 
@@ -166,10 +190,15 @@ export class WhatsAppWebhookController {
 
     const messageId: string = key?.id || `${rawPhone}-${data?.messageTimestamp || Date.now()}`;
 
+    this.logger.debug(`[WEBHOOK-DEBUG] messageId="${messageId}" messageText="${messageText.slice(0,50)}"`);
+
     // ── Skip fromMe (bot's own messages — we don't process them) ──
     if (key?.fromMe === true) {
+      this.logger.debug(`[EARLY RETURN] fromMe=true, skipping bot's own message`);
       return { status: 'ignored', reason: 'fromMe' };
     }
+
+    this.logger.debug(`[WEBHOOK-DEBUG] fromMe=${key?.fromMe}, continuing...`);
 
     // ── Other fields ──────────────────────────────
     const senderName: string = data?.pushName || '';
@@ -182,6 +211,8 @@ export class WhatsAppWebhookController {
       return { status: 'ignored', reason: 'duplicate' };
     }
 
+    this.logger.debug(`[WEBHOOK-DEBUG] Not duplicate, proceeding...`);
+
     // ── Find WhatsApp account by instance ─────────
     const whatsappAccount = await this.whatsappService.getAccountByInstanceName(instanceName);
     if (!whatsappAccount) {
@@ -191,6 +222,8 @@ export class WhatsAppWebhookController {
     this.logger.log(
       `📞 Message from ${phone} via ${instanceName}: "${messageText.slice(0, 80)}"`,
     );
+
+    this.logger.debug(`[WEBHOOK-DEBUG] Calling createLeadFromWebhook...`);
 
     // ── Parse + Create Lead ────────────────────────
     const lead = await this.parserService.createLeadFromWebhook({
@@ -202,6 +235,8 @@ export class WhatsAppWebhookController {
       whatsappAccountId: whatsappAccount?.id ?? null,
       whatsappOwnerId: whatsappAccount?.ownerId ?? null,
     });
+
+    this.logger.debug(`[WEBHOOK-DEBUG] createLeadFromWebhook returned: leadId=${lead?.id ?? 'NULL'}`);
 
     if (lead) {
       this.websocketGateway.emitLeadCreated(lead);
