@@ -288,8 +288,8 @@ export class ExcelService {
           break;
       }
 
-      // Цвет bot result
-      const resultCell = row.getCell(13);
+      // Цвет bot result (колонка 15 = "Результат")
+      const resultCell = row.getCell(15);
       switch (lead.botResult) {
         case 'BOOKED':
           resultCell.font = { color: { argb: 'FF00B050' }, bold: true };
