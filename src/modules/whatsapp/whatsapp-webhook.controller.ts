@@ -305,13 +305,35 @@ export class WhatsAppWebhookController {
 
     // ── Check if message contains BOOKING confirmation ──
     const lowerText = messageText.toLowerCase();
+    
+    // ИСКЛЮЧЕНИЯ: фразы-предложения (не подтверждения)
+    const isOffer = 
+      lowerText.includes('могу записать') ||
+      lowerText.includes('могу забронировать') ||
+      lowerText.includes('могу зафиксировать') ||
+      lowerText.includes('хотите записаться') ||
+      lowerText.includes('готовы записаться') ||
+      lowerText.includes('можем записать') ||
+      lowerText.includes('давайте запишу');
+    
+    if (isOffer) {
+      this.logger.debug(`⏸️ Skipped: detected OFFER phrase (not confirmation) for ${phone}`);
+      return {
+        status: 'success',
+        direction: 'outgoing',
+        phone,
+        isBookingConfirmation: false,
+      };
+    }
+    
+    // ПОДТВЕРЖДЕНИЯ: точные фразы
     const isBookingConfirmation = 
       lowerText.includes('записала вас') ||
       lowerText.includes('записал вас') ||
       lowerText.includes('ждем вас') ||
       lowerText.includes('ждём вас') ||
-      (lowerText.includes('запис') && lowerText.match(/\d{1,2}[\.:\-]\d{1,2}/)) || // "запись на 21.08"
-      (lowerText.includes('встреч') && lowerText.match(/\d{1,2}:\d{2}/)); // "до встречи" + time
+      lowerText.includes('до встречи') && lowerText.match(/\d{1,2}:\d{2}/) || // "до встречи в 10:30"
+      lowerText.match(/записываю .* на \d{1,2}\.\d{1,2}/); // "записываю вас на 22.08"
 
     if (isBookingConfirmation) {
       this.logger.log(`✅ Detected BOOKING confirmation in outgoing message for ${phone}`);

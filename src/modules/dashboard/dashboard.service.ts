@@ -77,13 +77,42 @@ export class DashboardService {
       orderBy: { createdAt: 'asc' },
     });
 
-    const whatsappStats = waAccounts.map((acc) => ({
-      accountId: acc.id,
-      accountName: acc.name ?? acc.instanceName,
-      ownerName: acc.owner?.name ?? null,
-      status: acc.status,
-      leadsCount: acc._count.leads,
-    }));
+    // Calculate today's leads for each WhatsApp account
+    const whatsappStats = await Promise.all(
+      waAccounts.map(async (acc) => {
+        const [todayLeadsCount, botBooked, botUnknown, botLost] = await Promise.all([
+          this.prisma.lead.count({
+            where: {
+              whatsappAccountId: acc.id,
+              createdAt: { gte: todayStart },
+            },
+          }),
+          this.prisma.lead.count({
+            where: { whatsappAccountId: acc.id, botResult: 'BOOKED' },
+          }),
+          this.prisma.lead.count({
+            where: { whatsappAccountId: acc.id, botResult: 'UNKNOWN' },
+          }),
+          this.prisma.lead.count({
+            where: { whatsappAccountId: acc.id, botResult: 'LOST' },
+          }),
+        ]);
+
+        return {
+          accountId: acc.id,
+          accountName: acc.name ?? acc.instanceName,
+          phone: acc.phone ?? null, // Add phone
+          ownerName: acc.owner?.name ?? null,
+          status: acc.status,
+          leadsCount: acc._count.leads,
+          todayLeadsCount, // NEW: today's leads count
+          // Bot result stats
+          botResultBooked: botBooked,
+          botResultUnknown: botUnknown,
+          botResultLost: botLost,
+        };
+      }),
+    );
 
     // ── Procedure stats (top 10) ──
     const procedureGroups = await this.prisma.lead.groupBy({

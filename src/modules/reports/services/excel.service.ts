@@ -143,14 +143,25 @@ export class ExcelService {
     ws.getCell('A2').alignment = { horizontal: 'center' };
     ws.getRow(2).height = 18;
 
+    // ── Bot Result statistics ──
+    const botBooked = leads.filter((l) => l.botResult === 'BOOKED').length;
+    const botUnknown = leads.filter((l) => l.botResult === 'UNKNOWN').length;
+    const botLost = leads.filter((l) => l.botResult === 'LOST').length;
+
+    ws.mergeCells('A3:S3');
+    ws.getCell('A3').value = `BOOKED: ${botBooked}  |  UNKNOWN: ${botUnknown}  |  LOST: ${botLost}`;
+    ws.getCell('A3').font = { bold: true, size: 11 };
+    ws.getCell('A3').alignment = { horizontal: 'center' };
+    ws.getRow(3).height = 20;
+
     if (period) {
-      ws.mergeCells('A3:S3');
-      ws.getCell('A3').value = `Период: ${period}`;
-      ws.getCell('A3').alignment = { horizontal: 'center' };
-      ws.getRow(3).height = 16;
+      ws.mergeCells('A4:S4');
+      ws.getCell('A4').value = `Период: ${period}`;
+      ws.getCell('A4').alignment = { horizontal: 'center' };
+      ws.getRow(4).height = 16;
     }
 
-    const dataStartRow = period ? 5 : 4;
+    const dataStartRow = period ? 6 : 5;
 
     // ── Column definitions (19 колонок A–S) ──
     ws.columns = [
@@ -222,7 +233,7 @@ export class ExcelService {
       const resultLabels: Record<string, string> = {
         BOOKED:  '✅ Запись была',
         LOST:    '❌ Слив / отказ',
-        UNKNOWN: '—',
+        UNKNOWN: '⏳ Не определён',
       };
       const botResultText = lead.botResult ? (resultLabels[lead.botResult] ?? lead.botResult) : '—';
 
@@ -328,17 +339,6 @@ export class ExcelService {
     revCell.value = `Записано: ${booked.length} | Выручка: ${fmtKZT(revenue)}`;
     revCell.font = { bold: true, size: 11, color: { argb: 'FF00B050' } };
     revCell.alignment = { horizontal: 'center' };
-
-    // Bot Result stats
-    const botBooked = leads.filter((l) => l.botResult === 'BOOKED').length;
-    const botUnknown = leads.filter((l) => l.botResult === 'UNKNOWN').length;
-    const botLost = leads.filter((l) => l.botResult === 'LOST').length;
-    const sumBotRow = summaryRowNum + 2;
-    ws.mergeCells(`A${sumBotRow}:H${sumBotRow}`);
-    const botCell = ws.getCell(`A${sumBotRow}`);
-    botCell.value = `Результат: ✅ Записался ${botBooked} | — Не определён ${botUnknown} | ❌ Слив ${botLost}`;
-    botCell.font = { bold: true, size: 11 };
-    botCell.alignment = { horizontal: 'center' };
 
     return ws;
   }

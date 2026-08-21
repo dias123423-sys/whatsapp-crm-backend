@@ -190,7 +190,7 @@ export class ReportsService {
       accounts.map(async (acc) => {
         const base = { whatsappAccountId: acc.id };
 
-        const [total, withProcedure, withoutProcedure, assigned, booked, followUp, noAnswer, closed] =
+        const [total, withProcedure, withoutProcedure, assigned, booked, followUp, noAnswer, closed, botResultBooked, botResultUnknown, botResultLost] =
           await Promise.all([
             this.prisma.lead.count({ where: base }),
             this.prisma.lead.count({
@@ -204,6 +204,9 @@ export class ReportsService {
             this.prisma.lead.count({ where: { ...base, status: 'FOLLOW_UP' } }),
             this.prisma.lead.count({ where: { ...base, status: 'NO_ANSWER' } }),
             this.prisma.lead.count({ where: { ...base, status: 'CLOSED' } }),
+            this.prisma.lead.count({ where: { ...base, botResult: 'BOOKED' } }),
+            this.prisma.lead.count({ where: { ...base, botResult: 'UNKNOWN' } }),
+            this.prisma.lead.count({ where: { ...base, botResult: 'LOST' } }),
           ]);
 
         return {
@@ -213,6 +216,7 @@ export class ReportsService {
           phone: acc.phone ?? null,
           status: acc.status,
           total, withProcedure, withoutProcedure, assigned, booked, followUp, noAnswer, closed,
+          botResultBooked, botResultUnknown, botResultLost,
         };
       }),
     );

@@ -359,6 +359,12 @@ const tests: Array<{ text: string; expected: 'BOOKED' | 'LOST' | 'UNKNOWN' | nul
   
   // Scenario E: Time pattern после BOOKED
   { text: 'сағат 4-ке жазып қойыңыз', expected: 'BOOKED' },
+
+  // ── Scenario F: CITY CLARIFICATION (клиент из другого города) ──
+  { text: 'Хочу записаться на массаж лица 3990 тг\nЗдравствуйте. Я проживаю в г.Актобе\nЕлена', expected: 'UNKNOWN' },
+  { text: 'Хочу записаться\nЯ из Шымкента', expected: 'UNKNOWN' },
+  { text: 'Жазылғым келеді\nМен Қарағандыда тұрамын', expected: 'UNKNOWN' },
+  { text: 'Хочу записаться\nЯ живу в Алматы', expected: 'BOOKED' }, // Алматы = наш город
 ];
 
 // ════════════════════════════════════════════════════════════
