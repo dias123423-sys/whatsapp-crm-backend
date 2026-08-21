@@ -192,10 +192,22 @@ export class WhatsAppWebhookController {
 
     this.logger.debug(`[WEBHOOK-DEBUG] messageId="${messageId}" messageText="${messageText.slice(0,50)}"`);
 
-    // ── Skip fromMe (bot's own messages — we don't process them) ──
+    // ── Find WhatsApp account by instance ─────────
+    const whatsappAccount = await this.whatsappService.getAccountByInstanceName(instanceName);
+    if (!whatsappAccount) {
+      this.logger.warn(`WhatsApp account not found for instance="${instanceName}" — creating lead anyway`);
+    }
+
+    // ── Handle OUTGOING messages (fromMe = true) ──
     if (key?.fromMe === true) {
-      this.logger.debug(`[EARLY RETURN] fromMe=true, skipping bot's own message`);
-      return { status: 'ignored', reason: 'fromMe' };
+      this.logger.debug(`[OUTGOING] fromMe=true, processing operator's message`);
+      return await this.handleOutgoingMessage({
+        phone,
+        messageText,
+        messageId,
+        instanceName,
+        whatsappAccountId: whatsappAccount?.id ?? null,
+      });
     }
 
     this.logger.debug(`[WEBHOOK-DEBUG] fromMe=${key?.fromMe}, continuing...`);
@@ -212,12 +224,6 @@ export class WhatsAppWebhookController {
     }
 
     this.logger.debug(`[WEBHOOK-DEBUG] Not duplicate, proceeding...`);
-
-    // ── Find WhatsApp account by instance ─────────
-    const whatsappAccount = await this.whatsappService.getAccountByInstanceName(instanceName);
-    if (!whatsappAccount) {
-      this.logger.warn(`WhatsApp account not found for instance="${instanceName}" — creating lead anyway`);
-    }
 
     this.logger.log(
       `📞 Message from ${phone} via ${instanceName}: "${messageText.slice(0, 80)}"`,
@@ -248,6 +254,111 @@ export class WhatsAppWebhookController {
       leadId: lead?.id ?? null,
       phone,
       instance: instanceName,
+    };
+  }
+
+  // ════════════════════════════════════════════════
+  // OUTGOING MESSAGE (fromMe = true)
+  // ════════════════════════════════════════════════
+
+  private async handleOutgoingMessage(params: {
+    phone: string;
+    messageText: string;
+    messageId: string;
+    instanceName: string;
+    whatsappAccountId: string | null;
+  }) {
+    const { phone, messageText, messageId, instanceName, whatsappAccountId } = params;
+
+    this.logger.log(`📤 Outgoing message to ${phone} via ${instanceName}: "${messageText.slice(0, 80)}"`);
+
+    // Skip duplicate
+    const existing = await this.prisma.message.findUnique({ where: { messageId } });
+    if (existing) {
+      this.logger.warn(`🔁 Duplicate outgoing message: ${messageId}`);
+      return { status: 'ignored', reason: 'duplicate' };
+    }
+
+    // Find or create client
+    let client = await this.prisma.client.findUnique({ where: { phone } });
+    if (!client) {
+      client = await this.prisma.client.create({
+        data: {
+          phone,
+          normalizedPhone: phone, // Required field
+          name: '',
+          whatsappName: '',
+        },
+      });
+      this.logger.log(`📇 Created new client: ${phone}`);
+    }
+
+    // Save outgoing message
+    await this.prisma.message.create({
+      data: {
+        messageId,
+        clientId: client.id,
+        direction: 'OUTGOING',
+        message: messageText,
+      },
+    });
+
+    // ── Check if message contains BOOKING confirmation ──
+    const lowerText = messageText.toLowerCase();
+    const isBookingConfirmation = 
+      lowerText.includes('записала вас') ||
+      lowerText.includes('записал вас') ||
+      lowerText.includes('ждем вас') ||
+      lowerText.includes('ждём вас') ||
+      (lowerText.includes('запис') && lowerText.match(/\d{1,2}[\.:\-]\d{1,2}/)) || // "запись на 21.08"
+      (lowerText.includes('встреч') && lowerText.match(/\d{1,2}:\d{2}/)); // "до встречи" + time
+
+    if (isBookingConfirmation) {
+      this.logger.log(`✅ Detected BOOKING confirmation in outgoing message for ${phone}`);
+
+      // Find latest lead for this client
+      const latestLead = await this.prisma.lead.findFirst({
+        where: {
+          client: { phone },
+          status: { in: ['NEW', 'ASSIGNED', 'CALLING'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (latestLead) {
+        await this.prisma.lead.update({
+          where: { id: latestLead.id },
+          data: {
+            botResult: 'BOOKED',
+            status: 'BOOKED',
+          },
+        });
+
+        this.logger.log(`🎯 Updated lead ${latestLead.id} to BOOKED (operator confirmation detected)`);
+
+        // Emit websocket event
+        const updatedLead = await this.prisma.lead.findUnique({
+          where: { id: latestLead.id },
+          include: {
+            client: true,
+            operator: { include: { user: true } },
+            whatsappOwner: true,
+          },
+        });
+
+        if (updatedLead) {
+          this.websocketGateway.emitLeadUpdated(updatedLead);
+        }
+      } else {
+        this.logger.warn(`No active lead found for ${phone} to mark as BOOKED`);
+      }
+    }
+
+    return {
+      status: 'success',
+      direction: 'outgoing',
+      phone,
+      isBookingConfirmation,
     };
   }
 

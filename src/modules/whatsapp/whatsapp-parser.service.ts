@@ -209,32 +209,133 @@ export class WhatsAppParserService {
     const result       = this.determineResult(fullContext);
     const period       = this.determinePeriod();
 
-    const lead = await this.prisma.lead.create({
-      data: {
-        clientId:          client.id,
-        whatsappAccountId: whatsappAccountId ?? undefined,
-        whatsappOwnerId:   whatsappOwnerId ?? undefined,
-        originalMessage:   messageText || '',
-        parsedProcedures:  offerMatch?.procedures ?? [],
-        parsedPrice:       offerMatch?.price ?? priceResult?.price ?? null,
-        parsedCurrency:    'KZT',
-        parsedDate:        parsedDate ?? undefined,
-        parsedTime:        parsedTime ?? undefined,
-        offerId:           offerMatch?.offerId ?? undefined,
-        status:            'NEW',
-        source:            'WHATSAPP',
-        period,
-        botResult:         result ?? undefined,
-        botResultUpdatedAt: result ? new Date() : undefined,
-      } as any,
-      include: { client: true, whatsappAccount: true, whatsappOwner: true, offer: true },
-    });
+    // ─────────────────────────────────────────────────
+    // DUPLICATE PREVENTION: Try to create, catch unique constraint violation
+    // If another webhook created lead concurrently → retry as update
+    // ─────────────────────────────────────────────────
+    try {
+      const lead = await this.prisma.lead.create({
+        data: {
+          clientId:          client.id,
+          whatsappAccountId: whatsappAccountId ?? undefined,
+          whatsappOwnerId:   whatsappOwnerId ?? undefined,
+          originalMessage:   messageText || '',
+          parsedProcedures:  offerMatch?.procedures ?? [],
+          parsedPrice:       offerMatch?.price ?? priceResult?.price ?? null,
+          parsedCurrency:    'KZT',
+          parsedDate:        parsedDate ?? undefined,
+          parsedTime:        parsedTime ?? undefined,
+          offerId:           offerMatch?.offerId ?? undefined,
+          status:            'NEW',
+          source:            'WHATSAPP',
+          period,
+          botResult:         result ?? undefined,
+          botResultUpdatedAt: result ? new Date() : undefined,
+        } as any,
+        include: { client: true, whatsappAccount: true, whatsappOwner: true, offer: true },
+      });
 
-    this.logger.log(
-      `✅ Lead created: ${lead.id} | context=${prevMessages.length}msgs | proc=${offerMatch?.offerName ?? 'UNKNOWN'} | price=${offerMatch?.price ?? priceResult?.price ?? 'NULL'} | date=${parsedDate ?? '—'} | time=${parsedTime ?? '—'} | result=${result ?? '—'}`,
-    );
+      this.logger.log(
+        `✅ Lead created: ${lead.id} | context=${prevMessages.length}msgs | proc=${offerMatch?.offerName ?? 'UNKNOWN'} | price=${offerMatch?.price ?? priceResult?.price ?? 'NULL'} | date=${parsedDate ?? '—'} | time=${parsedTime ?? '—'} | result=${result ?? '—'}`,
+      );
 
-    return lead;
+      return lead;
+    } catch (error: any) {
+      // Check if this is a unique constraint violation on clientId
+      // Prisma error code P2002 = unique constraint violation
+      if (error.code === 'P2002' && error.meta?.target?.includes('clientId')) {
+        this.logger.warn(
+          `⚠️  Duplicate lead prevented for client ${client.id} (${phone}). Another webhook created lead concurrently. Retrying as update...`
+        );
+
+        // Query again for the lead that was just created by another webhook
+        const existingLead = await this.prisma.lead.findFirst({
+          where: {
+            clientId: client.id,
+            status: { in: ['NEW', 'ASSIGNED', 'CALLING', 'FOLLOW_UP'] },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        if (existingLead) {
+          // Load messages for context
+          const allMessages = await this.prisma.message.findMany({
+            where: { 
+              clientId: client.id, 
+              createdAt: { gte: existingLead.createdAt }
+            },
+            orderBy: { createdAt: 'asc' },
+          });
+          const fullConversation = allMessages.map((m) => m.message).join('\n');
+
+          // Reparse with full context
+          const ctxOffer = await this.matchOffer(fullConversation, this.extractPrice(fullConversation)?.price);
+          const ctxPrice = this.extractPrice(fullConversation);
+          const ctxDate = this.extractDate(fullConversation);
+          const ctxTime = this.extractTime(fullConversation);
+          const ctxResult = this.determineResult(fullConversation);
+
+          const updateData: any = {
+            originalMessage: existingLead.originalMessage
+              ? `${existingLead.originalMessage}\n---\n${messageText}`
+              : messageText,
+            updatedAt: new Date(),
+          };
+
+          // Update procedure if not set
+          const hasProcedure = existingLead.parsedProcedures?.length > 0;
+          if (!hasProcedure && ctxOffer) {
+            updateData.parsedProcedures = ctxOffer.procedures;
+            updateData.offerId = ctxOffer.offerId;
+          }
+
+          // Update price if not set
+          const hasPrice = existingLead.parsedPrice && existingLead.parsedPrice > 0;
+          if (!hasPrice) {
+            if (ctxOffer) {
+              updateData.parsedPrice = ctxOffer.price;
+              updateData.parsedCurrency = 'KZT';
+            } else if (ctxPrice) {
+              updateData.parsedPrice = ctxPrice.price;
+              updateData.parsedCurrency = 'KZT';
+            }
+          }
+
+          // Update date if not set
+          if (ctxDate && !(existingLead as any).parsedDate) {
+            updateData.parsedDate = ctxDate;
+          }
+
+          // Update time if not set
+          if (ctxTime && !(existingLead as any).parsedTime) {
+            updateData.parsedTime = ctxTime;
+          }
+
+          // Update result (don't degrade BOOKED to UNKNOWN)
+          const prevResult = existingLead.botResult;
+          const shouldUpdateResult =
+            ctxResult !== null &&
+            ctxResult !== prevResult &&
+            !(prevResult === 'BOOKED' && ctxResult !== 'LOST');
+
+          if (shouldUpdateResult) {
+            updateData.botResult = ctxResult;
+            updateData.botResultUpdatedAt = new Date();
+          }
+
+          await this.prisma.lead.update({ where: { id: existingLead.id }, data: updateData });
+          this.logger.log(`✅ Lead ${existingLead.id} updated after duplicate prevention`);
+          return null;
+        }
+
+        // If we still can't find the lead, something is very wrong
+        this.logger.error(`❌ CRITICAL: Failed to find or create lead for client ${client.id} after unique constraint violation`);
+        throw new Error(`Failed to find or create lead for client ${client.id}`);
+      }
+
+      // Other errors → rethrow
+      throw error;
+    }
   }
 
   // ═══════════════════════════════════════════════
@@ -366,11 +467,24 @@ export class WhatsAppParserService {
     if (!text) return null;
     const t = text.toLowerCase().replace(/ё/g, 'е');
 
-    // Формат "16:00" / "09:30"
-    const exactMatch = t.match(/\b(\d{1,2}):(\d{2})\b/);
-    if (exactMatch) {
-      const h = parseInt(exactMatch[1], 10);
-      const m = parseInt(exactMatch[2], 10);
+    // Формат "16:00" / "09:30" / "19.30" / "19;30" / "19-30" / "17,30"
+    // Поддерживаем разделители: : . ; - ,
+    // ВАЖНО: Ищем ВСЕ совпадения и берём первое валидное ВРЕМЯ (не дату)
+    const allMatches = t.matchAll(/(\d{1,2})[:\.;,\-](\d{2})(?!\d)/g);
+    for (const match of allMatches) {
+      const h = parseInt(match[1], 10);
+      const m = parseInt(match[2], 10);
+      
+      // Пропускаем очевидные ДАТЫ (не время):
+      // Логика: если h > 12 И m <= 12 И m НЕ круглые минуты (не 00, 30)
+      // Примеры дат: 22.08, 20.08, 15.03 и т.д.
+      // Примеры НЕ дат: 13.00 (00 минуты - это время!), 18.30 (30 минуты)
+      const isRoundMinutes = (m === 0 || m === 30 || m === 15 || m === 45);
+      if (h > 12 && m <= 12 && !isRoundMinutes) {
+        continue; // Это скорее всего дата, пропускаем
+      }
+      
+      // Проверяем что это валидное время
       if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
         return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
       }
@@ -578,58 +692,158 @@ export class WhatsAppParserService {
     }
 
     // ── STEP 2: Была попытка записи → проверяем lastMessage ───────────────
-    // ── 2.1. LOST в последнем сообщении (ВЫСШИЙ ПРИОРИТЕТ) ──────────────────
-    // ВАЖНО: Избегаем false positives типа "мне подходит" → "не подходит"
     
-    // Сначала проверяем явные отказы БЕЗ риска substring collision
-    const LOST_PHRASES_SAFE = [
+    // ══════════════════════════════════════════════════════════════════════
+    // NEW LOGIC: Check ONLY last 2 messages (ignore auto-ad)
+    // ══════════════════════════════════════════════════════════════════════
+    // Problem: Auto-ads contain "ХОЧУ ЗАПИСАТЬСЯ...3990 ТГ" → parser thinks BOOKED
+    // Solution: Detect auto-ad, check only last 2 REAL client messages
+    
+    // Helper: detect auto-advertisement
+    const isAutoAd = (msg: string): boolean => {
+      const txt = msg.toLowerCase();
+      return /хочу записаться/i.test(txt) && /\d{3,4}\s*тг/i.test(txt);
+    };
+
+    // Get last 2 real messages (excluding auto-ad if present)
+    const startIndex = rawLines.length > 0 && isAutoAd(rawLines[0]) ? 1 : 0;
+    const realMessages = rawLines.slice(startIndex);
+    const last2Messages = realMessages.slice(-2);
+    const last2Text = last2Messages.join(' ').toLowerCase();
+
+    this.logger.debug(`[LAST2] First is auto-ad: ${startIndex > 0}, real messages: ${realMessages.length}`);
+    
+    // ═══════════════════════════════════════════════════════════════════════
+    // КРИТИЧЕСКИ ВАЖНО: Если ТОЛЬКО авто-реклама (0 реальных сообщений) = NULL
+    // ═══════════════════════════════════════════════════════════════════════
+    if (realMessages.length === 0) {
+      this.logger.log(`⚪ NULL | only auto-ad, no real client messages`);
+      return null;
+    }
+    
+    // ── 2.0. CITY/LOCATION CLARIFICATION (САМЫЙ ВЫСОКИЙ ПРИОРИТЕТ) ──────────
+    // АКТОБЕ = можно записать (наш город тоже)
+    // Другие города = UNKNOWN (слив)
+    const OTHER_CITIES = [
+      // АКТОБЕ УБРАН - это наш город!
+      'шымкент', 'шимкент',
+      'караганда', 'қарағанды',
+      'павлодар', 'семей', 'семипалатинск',
+      'петропавловск', 'костанай', 'қостанай',
+      'тараз', 'атырау', 'ақтау', 'актау',
+      'усть-каменогорск', 'өскемен', 'oskemen',
+      'кызылорда', 'қызылорда',
+      'талдыкорган', 'туркестан', 'темиртау',
+    ];
+    
+    const LOCATION_PHRASES = [
+      'проживаю в', 'живу в', 'я из', 'нахожусь в',
+      'я в городе', 'я в области',
+      'тұрамын', 'турамын',
+    ];
+    
+    const BOOKING_CONFIRMATIONS = [
+      'запішите', 'записывай', 'приду', 'прийду', 'да,', 'хорошо',
+      'ок', 'окей', 'удобно', 'могу прийти', 'завтра', 'послезавтра',
+      'жазып қой', 'жазып кой', 'жазып беріңіз', 'жазып бериниз',
+      'жазыламын', 'жазыңызшы', 'бекітіңіз', // казахские подтверждения
+    ];
+    
+    // Check ONLY last 2 messages for city mention
+    if (last2Messages.length > 0) {
+      // Check OTHER cities (not Aktobe/Almaty) - these are UNKNOWN (слив)
+      for (const city of OTHER_CITIES) {
+        if (last2Text.includes(city)) {
+          // Check if there's explicit booking confirmation
+          const hasExplicitConfirmation = BOOKING_CONFIRMATIONS.some(phrase => last2Text.includes(phrase));
+          const hasTimeDate = /в\s*\d{1,2}[:.]?\d{0,2}|\d{1,2}\s*(числа|августа|сентября|октября|ноября|декабря)|ға$|ге$/i.test(last2Text);
+          
+          if (!hasExplicitConfirmation && !hasTimeDate) {
+            this.logger.log(`⏳ UNKNOWN | other city "${city}" in last 2 WITHOUT confirmation`);
+            return 'UNKNOWN';
+          }
+        }
+      }
+      
+      // NEW: Check if client ONLY wrote "Aktobe" or city name without confirmation
+      // This means they're thinking, not booking yet
+      const isOnlyCityMention = last2Messages.length <= 2 && (
+        last2Text.trim() === 'актобе' ||
+        last2Text.trim() === 'алматы' ||
+        last2Text.trim() === 'алмата' ||
+        /^(актобе|алматы|алмата)[\s,\.]*$/i.test(last2Text) ||
+        (last2Messages.length === 2 && 
+         /^(актобе|алматы)$/i.test(last2Messages[0]) && 
+         /^[а-яёА-ЯЁ]{2,20}$/i.test(last2Messages[1])) // город + имя
+      );
+      
+      if (isOnlyCityMention) {
+        const hasConfirmation = BOOKING_CONFIRMATIONS.some(phrase => last2Text.includes(phrase));
+        const hasTime = /в\s*\d{1,2}[:.]?\d{0,2}|\d{1,2}[:\.]\d{2}|ға$|ге$|\d{1,2}\s*(числа|августа)/i.test(last2Text);
+        
+        if (!hasConfirmation && !hasTime) {
+          this.logger.log(`⏳ UNKNOWN | only city name in last 2 WITHOUT confirmation (thinking)`);
+          return 'UNKNOWN';
+        }
+      }
+      
+      // Check location phrases in last 2 (excluding Almaty/Aktobe)
+      for (const phrase of LOCATION_PHRASES) {
+        if (last2Text.includes(phrase)) {
+          const contextMatch = last2Text.match(new RegExp(phrase + '\\s*([а-яөұң\\w\\s]{0,30})', 'i'));
+          if (contextMatch && !contextMatch[0].includes('алмат') && !contextMatch[0].includes('актоб')) {
+            this.logger.log(`⏳ UNKNOWN | location phrase in last 2 (not Almaty/Aktobe): "${phrase}"`);
+            return 'UNKNOWN';
+          }
+        }
+      }
+    }
+    
+    // ══════════════════════════════════════════════════════════════════════
+    // ПРАВИЛЬНАЯ ЛОГИКА: КОНТЕКСТ ВАЖЕН!
+    // ══════════════════════════════════════════════════════════════════════
+    // "НЕТ" само по себе ≠ ОТКАЗ! Это часто ответ на вопрос бота.
+    // Проверяем КОНТЕКСТ в последних 2-3 сообщениях.
+    
+    const last3Messages = rawLines.slice(-3);
+    const last3Text = last3Messages.join(' | ').toLowerCase();
+    const allText = rawLines.join(' ').toLowerCase();
+
+    // ── 2.1. LOST: явный отказ в КОНТЕКСТЕ последних 3 сообщений ──────────
+    const LOST_PATTERNS = [
+      /не надо.*(не пишите|все на этом)/,
+      /не нужно.*не нужно/, // повторение = явный отказ
+      /отмените/,
+      /передумал|передумала/,
+      /(я|mы).*(уже была|были).*(недовольн|плохо)/,
+      /не пишите.*все на этом/,
+      /ну ладно.*другой раз/,
+      /если поменяю решение/,
+      /не получится.*на работу/,    // "не получится, на работу вызвали"
+      /не получиться.*на работу/,   // опечатка
+      /на работу вызвали/,           // вызвали на работу = отмена
+      /пусть кому.?то повезёт/,      // "пусть кому-то повезёт" = я отказываюсь
+      /пусть кому.?то повезет/,      // без ё
+      /не беспокоит/,                // "пусть не беспокоит меня"
+      /менеджер.{0,10}рыбак/,        // негатив про менеджеров
+      /не смогу(?!.*завтра|послезавтра)/,  // "не смогу" без конкретной даты
       // КАЗАХСКИЙ
-      'бармаймын', 'бармайм', 'бармаим',
-      'келмеймін', 'келмейм', 'келмим',
-      'керек емес', 'керек жоқ', 'керек жок',
-      'қымбат екен', 'кымбат екен',
-      'ойымнан қайттым', 'ойымнан кайттым',
-      'қаламаймын', 'каламаймын',
-      'жоқ, керек емес', 'жок, керек емес',
-      // РУССКИЙ (без риска substring collision)
-      'не буду', 'не хочу', 'не приду', 'не актуально',
-      'отказываюсь', 'передумала', 'передумал',
-      'не интересно', 'не нужно', 'не надо',
-      'спасибо не надо', 'спасибо, не надо',
-      'запишусь в другом', 'слишком дорого', 'дороговато',
-      'нет, дорого', 'это дорого', 'нет спасибо',
-      'дорого',
+      /келмеймін|келмеймин/,        // не приду
+      /бармаймын|бармаймин/,        // не пойду
+      /керек емес/,                 // не надо
+      /қолым бос емес|колым бос емес/, // я занят (нет времени)
+      /қажет емес|кажет емес/,      // не нужно
+      /жазбаңыз|жазбаныз/,          // не записывайте
     ];
 
-    for (const p of LOST_PHRASES_SAFE) {
-      if (lastMessage.includes(p)) {
-        this.logger.log(`❌ LOST | refusal in last message: "${p}"`);
+    for (const pattern of LOST_PATTERNS) {
+      if (pattern.test(last3Text)) {
+        this.logger.log(`❌ LOST | refusal pattern in last 3: ${pattern}`);
         return 'LOST';
       }
     }
 
-    // Проверяем "не подходит" с word boundary (избегаем "мне подходит")
-    if (/\bне\s+подходит/.test(lastMessage) || lastMessage.startsWith('не подходит')) {
-      this.logger.log(`❌ LOST | refusal: "не подходит"`);
-      return 'LOST';
-    }
-    
-    if (/\bмне\s+не\s+подходит/.test(lastMessage)) {
-      this.logger.log(`❌ LOST | refusal: "мне не подходит"`);
-      return 'LOST';
-    }
-
-    // Короткие KZ слова отказа — только если lastMessage именно это слово
-    const kzShortLost = ['жоқ', 'жок', 'қымбат', 'кымбат'];
-    for (const p of kzShortLost) {
-      const cleaned = lastMessage.replace(/[.,!?]/g, '').trim();
-      if (cleaned === p || cleaned.startsWith(p + ' ') || cleaned.endsWith(' ' + p)) {
-        this.logger.log(`❌ LOST | short KZ refusal: "${p}"`);
-        return 'LOST';
-      }
-    }
-
-    // ── 2.2. UNKNOWN в последнем сообщении ───────────────────────────────────
+    // ── 2.3. UNKNOWN в последнем сообщении ───────────────────────────────────
     const UNKNOWN_PHRASES = [
       // КАЗАХСКИЙ
       'ойланам', 'ойланайын', 'ойланып алайын',
@@ -640,6 +854,9 @@ export class WhatsAppParserService {
       'я подумаю', 'подумаю', 'надо подумать',
       'позже', 'потом', 'позже скажу', 'позже напишу',
       'ещё не знаю', 'еще не знаю',
+      'повременю',                      // откладывает решение
+      'на работе',                      // занят на работе
+      'пока не могу',                   // временно не может
     ];
 
     for (const p of UNKNOWN_PHRASES) {
@@ -648,148 +865,94 @@ export class WhatsAppParserService {
         return 'UNKNOWN';
       }
     }
+    
+    // ── 2.3.1. UNKNOWN: откладывает на будущее (месяцы) ──────────────────────
+    if (/в\s+(сентябр|октябр|ноябр|декабр)/i.test(lastMessage)) {
+      this.logger.log(`⏳ UNKNOWN | postponing to future month`);
+      return 'UNKNOWN';
+    }
+    
+    // ── 2.3.2. UNKNOWN: "пока" в начале сообщения ─────────────────────────────
+    if (/^пока[,\s\.]/i.test(lastMessage.trim())) {
+      this.logger.log(`⏳ UNKNOWN | "пока" at message start`);
+      return 'UNKNOWN';
+    }
 
-    // ── 2.3. BOOKED в последнем сообщении ────────────────────────────────────
-    const BOOKED_PHRASES = [
-      // ══════════════════════════════════════════════════
-      // КАЗАХСКИЙ — ХОЧУ ЗАПИСАТЬСЯ
-      // ══════════════════════════════════════════════════
-      'жазылғым келеді', 'жазылгым келеді', 'жазылғым келед', 'жазылгым келед',
-      'жазылғым келіп тұр', 'жазылгым келіп тур', 'жазылгым келип тур',
-      'жазылуға келдім', 'жазылуга келдим',
-      'жазылып алайын', 'жазылып алайыншы',
-      'жазылып қояйын', 'жазылып кояйын',
-      'жазып қояйын', 'жазып кояйын', // Краткая форма
-
-      // ══════════════════════════════════════════════════
-      // ЖАЗЫП ҚОЮ — ВАРИАНТЫ
-      // ══════════════════════════════════════════════════
-      'жазып қойыңыз', 'жазып койыңыз', 'жазып қойыныз', 'жазып коюыныз',
-      'жазып қой', 'жазып кой',
-      'жазып қоя беріңіз', 'жазып коя бериниз', 'жазып қоя бериниз',
-      'жаза беріңіз', 'жаза бериниз',
-      'жазып қойыңызшы', 'жазып койыңызшы',
-      'жазып алыңыз', 'жазып алыныз',
-      'жазып беріңіз', 'жазып бериниз', 'жазып беріңізші',
-      'жаза бер',
-      'жазылдым',
-      'мені жазып қойыңыз', 'мени жазып койыныз',
-      'жазып қоя аласыз ба', 'жазып коя аласыз ба',
-
-      // ══════════════════════════════════════════════════
-      // ДАТА + ЗАПИСЬ
-      // ══════════════════════════════════════════════════
-      'ертеңге жаза беріңіз', 'ертенге жаза бериниз',
-      'ертеңге жазып қойыңыз', 'ертенге жазып койыныз',
-      'ертеңге жазып қой', 'ертенге жазып кой',
-      'бүгінге жазып қойыңыз', 'бугинге жазып койыныз',
-      'сол күнге жазып қойыңыз', 'сол кунге жазып койыныз',
-
-      // ══════════════════════════════════════════════════
-      // ВРЕМЯ + ЗАПИСЬ (частичные паттерны)
-      // ══════════════════════════════════════════════════
-      'ге жазып қойыңыз', 'ге жазып койыныз',
-      'ке жазып қой', 'ке жазып кой',
-
-      // ══════════════════════════════════════════════════
-      // ПОДТВЕРЖДЕНИЕ С КОНТЕКСТОМ
-      // ══════════════════════════════════════════════════
-      'барамын, жаз', 'келемін, жаз',
-      'иа, жазып', 'иә, жазып', 'да, жазып', 'ия, жазып',
-      'барамын, запишите', 'келемін, запишите',
-
-      // ══════════════════════════════════════════════════
-      // РУССКИЙ — ХОЧУ ЗАПИСАТЬСЯ
-      // ══════════════════════════════════════════════════
-      'хочу записаться', 'хочу записаться на', 'хочу записаться к',
-      'хочу записаться завтра', 'хочу записаться сегодня',
-      'хочу записаться к вам', 'хочу записаться на процедуру',
-      'хочу записаться на приём', 'хочу записаться на прием',
-
-      // ══════════════════════════════════════════════════
-      // РУССКИЙ — ЗАПИШИТЕ (EXPLICIT)
-      // ══════════════════════════════════════════════════
-      'запишите меня', 'запишите на', 'записывайте', 'записываюсь',
-      'я записываюсь', 'подтверждаю запись',
-      'да, записывайте', 'да, запишите',
-      'можно меня записать', // EXPLICIT: "можно МЕНЯ записать" = подтверждение
-      'запишите пожалуйста', 'запишите, пожалуйста',
-
-      // ══════════════════════════════════════════════════
-      // РУССКИЙ — ПРИДУ
-      // ══════════════════════════════════════════════════
-      'приеду на', 'я приду', 'буду завтра', 'буду сегодня',
+    // ── 2.2. BOOKED: есть ВРЕМЯ или ЯВНОЕ ПОДТВЕРЖДЕНИЕ во ВСЕХ сообщениях ──
+    // Проверяем ВСЕ сообщения, не только последнее!
+    const TIME_PATTERNS = [
+      /\d{1,2}[:\.]\d{2}/, // "14:30", "11.00"
+      /в\s*\d{1,2}(?:\s|$|,)/, // "в 18", "в 14"
+      /\d{1,2}\.\d{1,2}/, // "20.08", "22.08"
+      /завтра|послезавтра|сегодня/,
+      /ертең|ертен|бүгін|бугин/, // казахский: завтра, сегодня
     ];
 
-    // Сначала проверяем BOOKED в lastMessage (последнее сообщение = приоритет)
-    for (const p of BOOKED_PHRASES) {
-      if (lastMessage.includes(p)) {
-        this.logger.log(`✅ BOOKED | phrase in last message: "${p}"`);
-        return 'BOOKED';
-      }
-    }
-
-    // Проверяем специфические паттерны времени в lastMessage: "сағат 4-ке жазып қой"
-    const timeBookingPatterns = [
-      /сағат\s+\d+[:\-]?\d*\s*(ке|ге)\s*(жаз|жазып)/i,
-      /\d+[:\-]\d+\s*(ке|ге)\s*(жаз|жазып)/i,
+    const CONFIRMATION_PATTERNS = [
+      /вот удобно/,
+      /могу прийти/,
+      /хорошо,?\s*приду/,
+      /записывайте/,
+      /жазыламын|жазып қой|жазып кой/, // казахский: записываюсь, запишите
+      /приду/,
+      /буду/,
+      // КАЗАХСКИЙ (подтверждение)
+      /келемін|келемин/,    // приду
+      /барамын|барамин/,    // пойду
+      /келеді|келеди/,      // придёт
+      /жақсы|жаксы/,        // хорошо (подтверждение)
+      /жазып қойыңыз|жазып койыныз/, // запишите меня
+      /жазып беріңіз|жазып бериниз/, // запишите (вежливо)
+      // РУССКИЙ короткие подтверждения
+      /\bда\b/,             // да
+      /\bия\b/,             // да (разговорное)
+      /\bиа\b/,             // да (разговорное)
     ];
-    for (const pattern of timeBookingPatterns) {
-      if (lastMessage.match(pattern)) {
-        this.logger.log(`✅ BOOKED | time+booking pattern in last message`);
-        return 'BOOKED';
+
+    let hasTime = false;
+    let hasConfirmation = false;
+
+    for (const pattern of TIME_PATTERNS) {
+      if (pattern.test(allText)) {
+        hasTime = true;
+        this.logger.log(`⏰ Time/date found: ${pattern}`);
+        break;
       }
     }
 
-    // ── 2.4. EDGE CASE: Короткий ответ ПОСЛЕ отказа в предпоследнем ─────────
-    // Scenario:
-    //   Message 1: "Хочу записаться"
-    //   Message 2: "не успею"  ← явный отказ
-    //   Message 3: "иа"        ← короткий ответ (прощание, не подтверждение!)
-    //
-    // Без этой проверки: lastMessage="иа" → BOOKED (ошибка!)
-    // С этой проверкой: secondLast="не успею" (отказ) + last="иа" → LOST
-    
-    const SHORT_ANSWERS = ['иа', 'ия', 'ок', 'ok', 'жақсы', 'жаксы'];
-    const lastTrimmed = lastMessage.replace(/[.,!?]/g, '').trim();
-    
-    if (SHORT_ANSWERS.includes(lastTrimmed) && rawLines.length >= 2) {
-      // Получаем ПРЕДПОСЛЕДНЕЕ сообщение
-      const secondLastRawLine = rawLines[rawLines.length - 2] ?? '';
-      const secondLastMessage = normalizeResultText(secondLastRawLine);
-      
-      // Проверяем: предпоследнее = явный отказ?
-      const REFUSAL_PHRASES = [
-        'дорого', 'не буду', 'не успею', 'не хочу', 'передумала', 'передумал',
-        'не надо', 'не нужно', 'нет спасибо',
-        'бармайм', 'келмейм', 'керек емес', 'қымбат', 'кымбат', 'улгермеймин',
-      ];
-      
-      let hasRefusalInSecondLast = false;
-      for (const p of REFUSAL_PHRASES) {
-        if (secondLastMessage.includes(p)) {
-          hasRefusalInSecondLast = true;
-          break;
-        }
-      }
-      
-      // Проверяем "жоқ"/"жок" как одиночное слово в предпоследнем
-      const secondLastTrimmed = secondLastMessage.replace(/[.,!?]/g, '').trim();
-      if (secondLastTrimmed === 'жоқ' || secondLastTrimmed === 'жок') {
-        hasRefusalInSecondLast = true;
-      }
-      
-      if (hasRefusalInSecondLast) {
-        this.logger.log(`❌ LOST | short answer "${lastTrimmed}" after refusal in second-last message`);
-        return 'LOST';
+    for (const pattern of CONFIRMATION_PATTERNS) {
+      if (pattern.test(allText)) {
+        hasConfirmation = true;
+        this.logger.log(`✅ Confirmation found: ${pattern}`);
+        break;
       }
     }
 
-    // ── 2.5. Была попытка, но lastMessage нейтральное → BOOKED (по умолчанию) ──
-    // Клиент пытался записаться, lastMessage не содержит явного LOST/UNKNOWN/BOOKED
-    // → Считаем контакт установленным, оператор должен работать с ним
-    this.logger.log(`✅ BOOKED | booking intent found, no explicit refusal/delay in last message`);
-    return 'BOOKED';
+    if (hasTime || hasConfirmation) {
+      this.logger.log(`✅ BOOKED | has time or explicit confirmation`);
+      return 'BOOKED';
+    }
+
+    // ── 2.3. UNKNOWN думает, уточняет ──────────────────────────────────────────
+    const UNKNOWN_PATTERNS_CONTEXT = [
+      /вечером напишу/,
+      /позже (скажу|напишу)/,
+      /я подумаю/,
+      /ойланам|ойланайын/, // казахский: подумаю
+    ];
+
+    for (const pattern of UNKNOWN_PATTERNS_CONTEXT) {
+      if (pattern.test(last3Text)) {
+        this.logger.log(`⏳ UNKNOWN | thinking/delaying: ${pattern}`);
+        return 'UNKNOWN';
+      }
+    }
+
+    // ── 2.4. ПО УМОЛЧАНИЮ: UNKNOWN (недостаточно данных для BOOKED) ──────────
+    // Если была попытка записи, но НЕТ времени и НЕТ явного подтверждения
+    // → UNKNOWN (клиент думает, уточняет, не подтвердил)
+    this.logger.log(`⏳ UNKNOWN | booking intent found, but no time/confirmation`);
+    return 'UNKNOWN';
   }
 
   // ═══════════════════════════════════════════════
