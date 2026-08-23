@@ -89,7 +89,7 @@ export class LeadsService {
         skip,
         take: limit,
         include: LEAD_INCLUDE,
-        orderBy: { updatedAt: 'desc' },  // Changed from createdAt to updatedAt
+        orderBy: { createdAt: 'desc' },  // Sort by creation time
       }),
       this.prisma.lead.count({ where }),
     ]);
