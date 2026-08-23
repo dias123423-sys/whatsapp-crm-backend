@@ -242,16 +242,16 @@ export class WhatsAppWebhookController {
       whatsappOwnerId: whatsappAccount?.ownerId ?? null,
     });
 
-    this.logger.debug(`[WEBHOOK-DEBUG] createLeadFromWebhook returned: leadId=${lead?.id ?? 'NULL'}`);
+    this.logger.debug(`[WEBHOOK-DEBUG] createLeadFromWebhook returned: leadId=${(lead as any)?.id ?? 'NULL'}`);
 
-    if (lead) {
-      this.websocketGateway.emitLeadCreated(lead);
-      this.logger.log(`✅ Lead ${lead.id} created | phone=${phone} | owner=${(lead as any).whatsappOwner?.name ?? '—'}`);
+    if (lead && (lead as any).id) {
+      this.websocketGateway.emitLeadCreated(lead as any);
+      this.logger.log(`✅ Lead ${(lead as any).id} created | phone=${phone} | owner=${((lead as any).whatsappOwner as any)?.name ?? '—'}`);
     }
 
     return {
       status: 'success',
-      leadId: lead?.id ?? null,
+      leadId: (lead as any)?.id ?? null,
       phone,
       instance: instanceName,
     };
@@ -303,6 +303,16 @@ export class WhatsAppWebhookController {
       },
     });
 
+    // ── Parse DATE and TIME from OUTGOING message ──
+    // ВАЖНО: дата и время записи часто в ответе оператора!
+    // Пример: "Ильхама, я записала Вас на 21.08 в 18:00"
+    const parsedDate = this.parserService.extractDate(messageText);
+    const parsedTime = this.parserService.extractTime(messageText);
+
+    if (parsedDate || parsedTime) {
+      this.logger.log(`📅 Parsed from OUTGOING: date=${parsedDate ?? '—'} time=${parsedTime ?? '—'}`);
+    }
+
     // ── Check if message contains BOOKING confirmation ──
     const lowerText = messageText.toLowerCase();
     
@@ -314,7 +324,10 @@ export class WhatsAppWebhookController {
       lowerText.includes('хотите записаться') ||
       lowerText.includes('готовы записаться') ||
       lowerText.includes('можем записать') ||
-      lowerText.includes('давайте запишу');
+      lowerText.includes('давайте запишу') ||
+      lowerText.includes('могу жазып қою') || // могу записать (каз.)
+      lowerText.includes('жазып қоя аламын ба') || // могу ли записать?
+      lowerText.includes('жазып қояйын ба'); // записать вас? (вопрос)
     
     if (isOffer) {
       this.logger.debug(`⏸️ Skipped: detected OFFER phrase (not confirmation) for ${phone}`);
@@ -328,12 +341,55 @@ export class WhatsAppWebhookController {
     
     // ПОДТВЕРЖДЕНИЯ: точные фразы
     const isBookingConfirmation = 
+      // РУССКИЙ - прошедшее время (100% подтверждение)
       lowerText.includes('записала вас') ||
       lowerText.includes('записал вас') ||
+      lowerText.includes('я записала') ||
+      lowerText.includes('я записал') ||
+      lowerText.includes('забронировала') ||
+      lowerText.includes('забронировал') ||
       lowerText.includes('ждем вас') ||
       lowerText.includes('ждём вас') ||
-      lowerText.includes('до встречи') && lowerText.match(/\d{1,2}:\d{2}/) || // "до встречи в 10:30"
-      lowerText.match(/записываю .* на \d{1,2}\.\d{1,2}/); // "записываю вас на 22.08"
+      lowerText.includes('до встречи') && lowerText.match(/\d{1,2}[:\.]?\d{2}/) || // "до встречи в 18:00"
+      // РУССКИЙ - настоящее время с датой
+      /записываю .{0,50} на \d{1,2}[.\-]\d{1,2}/.test(lowerText) || // "записываю на послезавтра, 24.08"
+      /записываю .{0,30} в \d{1,2}[:\.]\d{2}/.test(lowerText) ||    // "записываю в 16:00"
+      /записываю [^!?]{0,80}\d{1,2}[.\-]\d{1,2}/.test(lowerText) || // любой вариант с датой
+      /фиксирую .{0,50} на \d{1,2}[.\-]\d{1,2}/.test(lowerText) ||
+      lowerText.includes('зафиксировала') ||
+      lowerText.includes('зафиксировал') ||
+      // Специфичные шаблоны операторов
+      lowerText.includes('мы уже готовимся к вашему визиту') ||
+      lowerText.includes('бронируем кабинет') ||
+      lowerText.includes('с вами свяжется менеджер') ||
+      // КАЗАХСКИЙ - подтверждение
+      lowerText.includes('кутемин') || // "жду вас" (каз.)
+      lowerText.includes('күтемін') ||
+      lowerText.includes('кутеміз') || // "ждем вас"
+      lowerText.includes('күтеміз') ||
+      lowerText.includes('жазып қою') || // запишу вас
+      lowerText.includes('жазып қой') ||
+      lowerText.includes('жазып қояйын') ||
+      lowerText.includes('жазып қоямын') ||
+      lowerText.includes('жазып қоюға болады') || // можно записать
+      lowerText.includes('жазып қоя аламын') ||
+      lowerText.includes('белгілеп қою') || // отмечу вас
+      lowerText.includes('белгілеп қой') ||
+      lowerText.includes('белгілеп қоямын') ||
+      lowerText.includes('жазып берем') || // запишу (дам)
+      lowerText.includes('жазып берейін') ||
+      lowerText.includes('жаксы сагат') || // "хорошо в ... часов"
+      lowerText.includes('жазып қойдым') || // "записала" казах. прошедшее
+      lowerText.includes('жазып койдым') ||
+      lowerText.includes('күтеміз') ||      // "ждём вас"
+      lowerText.includes('кутемиз') ||
+      // Транслитерация (без қ/ғ)
+      lowerText.includes('жазып кою') ||
+      lowerText.includes('жазып кой') ||
+      lowerText.includes('жазып кояйын') ||
+      lowerText.includes('жазып коямын') ||
+      lowerText.includes('белгілеп кою') ||
+      lowerText.includes('белгілеп кой');
 
     if (isBookingConfirmation) {
       this.logger.log(`✅ Detected BOOKING confirmation in outgoing message for ${phone}`);
@@ -342,21 +398,30 @@ export class WhatsAppWebhookController {
       const latestLead = await this.prisma.lead.findFirst({
         where: {
           client: { phone },
-          status: { in: ['NEW', 'ASSIGNED', 'CALLING'] },
+          status: { in: ['NEW', 'ASSIGNED', 'CALLING', 'BOOKED'] },
         },
         orderBy: { createdAt: 'desc' },
       });
 
       if (latestLead) {
+        // Prepare update data
+        const updateData: any = {
+          botResult: 'BOOKED',
+          status: 'BOOKED',
+        };
+
+        // Add parsed date and time if available
+        if (parsedDate) updateData.parsedDate = parsedDate;
+        if (parsedTime) updateData.parsedTime = parsedTime;
+
         await this.prisma.lead.update({
           where: { id: latestLead.id },
-          data: {
-            botResult: 'BOOKED',
-            status: 'BOOKED',
-          },
+          data: updateData,
         });
 
-        this.logger.log(`🎯 Updated lead ${latestLead.id} to BOOKED (operator confirmation detected)`);
+        this.logger.log(
+          `🎯 Updated lead ${latestLead.id} to BOOKED | date=${parsedDate ?? '—'} time=${parsedTime ?? '—'}`
+        );
 
         // Emit websocket event
         const updatedLead = await this.prisma.lead.findUnique({
@@ -374,6 +439,30 @@ export class WhatsAppWebhookController {
       } else {
         this.logger.warn(`No active lead found for ${phone} to mark as BOOKED`);
       }
+    } else if (parsedDate || parsedTime) {
+      // Even if not BOOKED confirmation, still update date/time if found
+      const latestLead = await this.prisma.lead.findFirst({
+        where: {
+          client: { phone },
+          status: { in: ['NEW', 'ASSIGNED', 'CALLING', 'BOOKED'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (latestLead) {
+        const updateData: any = {};
+        if (parsedDate) updateData.parsedDate = parsedDate;
+        if (parsedTime) updateData.parsedTime = parsedTime;
+
+        await this.prisma.lead.update({
+          where: { id: latestLead.id },
+          data: updateData,
+        });
+
+        this.logger.log(
+          `📅 Updated lead ${latestLead.id} with date/time | date=${parsedDate ?? '—'} time=${parsedTime ?? '—'}`
+        );
+      }
     }
 
     return {
@@ -381,6 +470,8 @@ export class WhatsAppWebhookController {
       direction: 'outgoing',
       phone,
       isBookingConfirmation,
+      parsedDate: parsedDate ?? null,
+      parsedTime: parsedTime ?? null,
     };
   }
 

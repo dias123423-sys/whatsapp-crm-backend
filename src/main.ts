@@ -7,6 +7,9 @@ import { WinstonModule } from 'nest-winston';
 import * as winston from 'winston';
 
 async function bootstrap() {
+  // Set timezone to Asia/Almaty
+  process.env.TZ = 'Asia/Almaty';
+  
   // Create logger
   const logger = WinstonModule.createLogger({
     transports: [

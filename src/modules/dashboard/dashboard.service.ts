@@ -48,8 +48,17 @@ export class DashboardService {
       noAnswerLeads,
       closedLeads,
       bookedResult,
-      inProgressResult,
+      unknownResult,
       lostResult,
+      // OLD PARSER METRICS
+      withProcedure,
+      withoutProcedure,
+      withPrice,
+      withoutPrice,
+      withDate,
+      withoutDate,
+      withTime,
+      withoutTime,
     ] = await Promise.all([
       this.prisma.lead.count(),
       this.prisma.lead.count({ where: { createdAt: { gte: todayStart } } }),
@@ -60,9 +69,54 @@ export class DashboardService {
       this.prisma.lead.count({ where: { status: LeadStatus.FOLLOW_UP } }),
       this.prisma.lead.count({ where: { status: LeadStatus.NO_ANSWER } }),
       this.prisma.lead.count({ where: { status: LeadStatus.CLOSED } }),
+      // RESULT PARSER (botResult)
       this.prisma.lead.count({ where: { botResult: 'BOOKED' } }),
       this.prisma.lead.count({ where: { botResult: 'UNKNOWN' } }),
       this.prisma.lead.count({ where: { botResult: 'LOST' } }),
+      // OLD PARSER (parsedProcedures, parsedPrice, parsedDate, parsedTime)
+      this.prisma.$queryRaw<[{ count: bigint }]>`
+        SELECT COUNT(*) as count 
+        FROM leads 
+        WHERE array_length("parsedProcedures", 1) > 0
+      `.then(r => Number(r[0].count)),
+      this.prisma.$queryRaw<[{ count: bigint }]>`
+        SELECT COUNT(*) as count 
+        FROM leads 
+        WHERE array_length("parsedProcedures", 1) IS NULL OR array_length("parsedProcedures", 1) = 0
+      `.then(r => Number(r[0].count)),
+      this.prisma.lead.count({ 
+        where: { 
+          parsedPrice: { not: null, gt: 0 } 
+        } 
+      }),
+      this.prisma.lead.count({ 
+        where: { 
+          OR: [
+            { parsedPrice: null },
+            { parsedPrice: 0 },
+          ]
+        } 
+      }),
+      this.prisma.lead.count({ 
+        where: { 
+          parsedDate: { not: null } 
+        } 
+      }),
+      this.prisma.lead.count({ 
+        where: { 
+          parsedDate: null 
+        } 
+      }),
+      this.prisma.lead.count({ 
+        where: { 
+          parsedTime: { not: null } 
+        } 
+      }),
+      this.prisma.lead.count({ 
+        where: { 
+          parsedTime: null 
+        } 
+      }),
     ]);
 
     const inProgress = assignedLeads + callingLeads;
@@ -174,10 +228,19 @@ export class DashboardService {
       followUpLeads,
       noAnswerLeads,
       closedLeads,
-      // Bot result stats
+      // Bot result stats (RESULT PARSER)
       botResultBooked: bookedResult,
-      botResultInProgress: inProgressResult,
+      botResultUnknown: unknownResult,
       botResultLost: lostResult,
+      // OLD PARSER stats (основные данные лида)
+      withProcedure,
+      withoutProcedure,
+      withPrice,
+      withoutPrice,
+      withDate,
+      withoutDate,
+      withTime,
+      withoutTime,
       whatsappStats,
       procedureStats,
       operatorStats,

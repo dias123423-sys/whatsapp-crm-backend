@@ -56,6 +56,15 @@ export class WhatsAppParserService {
     this.logger.log(`📱 Processing: phone=${phone} text="${messageText.slice(0, 80)}"`);
 
     // ─────────────────────────────────────────────────
+    // GUARD: Пустые сообщения (медиа, голосовые, стикеры)
+    // Не создаём новый лид, только обновляем существующий
+    // ─────────────────────────────────────────────────
+    const isEmptyMessage = !messageText || messageText.trim().length === 0;
+    if (isEmptyMessage) {
+      this.logger.debug(`⏭️ Empty message (media/voice/sticker) from ${phone} — skip lead creation`);
+    }
+
+    // ─────────────────────────────────────────────────
     // STEP 1+2: Find or Create Client (dedup by normalizedPhone)
     // ─────────────────────────────────────────────────
     let client = await this.prisma.client.findFirst({
@@ -97,8 +106,10 @@ export class WhatsAppParserService {
     const recentLead = await this.prisma.lead.findFirst({
       where: {
         clientId: client.id,
-        status: { in: ['NEW', 'ASSIGNED', 'CALLING', 'FOLLOW_UP'] },
-        // ❌ REMOVED: createdAt: { gte: oneDayAgo } — теперь проверяем ВСЕ активные лиды
+        status: { in: ['NEW', 'ASSIGNED', 'CALLING', 'FOLLOW_UP', 'BOOKED'] },
+        // FIX: включён BOOKED чтобы не создавались дубли после подтверждения записи
+        // Ограничиваем 7 днями чтобы не обновлять очень старые лиды
+        createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -116,12 +127,18 @@ export class WhatsAppParserService {
         orderBy: { createdAt: 'asc' },
       });
       const fullConversation = allMessages.map((m) => m.message).join('\n');
+      // FIX: для matchOffer используем только INCOMING сообщения клиента
+      // чтобы слова оператора не влияли на определение процедуры/пола
+      const incomingOnly = allMessages
+        .filter((m) => m.direction === 'INCOMING')
+        .map((m) => m.message)
+        .join('\n');
 
       this.logger.debug(`📝 Context: ${allMessages.length} messages`);
 
-      // STEP 6: OLD PARSER — procedure + price (приоритет над новыми данными)
-      const ctxOffer = await this.matchOffer(fullConversation, this.extractPrice(fullConversation)?.price);
-      const ctxPrice = this.extractPrice(fullConversation);
+      // STEP 6: OLD PARSER — procedure + price (только по INCOMING, чтобы слова оператора не влияли)
+      const ctxOffer = await this.matchOffer(incomingOnly, this.extractPrice(incomingOnly)?.price);
+      const ctxPrice = this.extractPrice(incomingOnly);
 
       // STEP 7: CONTEXT PARSER — date + time
       const ctxDate = this.extractDate(fullConversation);
@@ -195,15 +212,27 @@ export class WhatsAppParserService {
     // ВАЖНО: текущее сообщение УЖЕ в базе (upsert выше), не дублируем!
     // ─────────────────────────────────────────────────
 
+    // FIX: Если сообщение пустое (медиа/голос/стикер) — НЕ создаём новый лид
+    // Пустые сообщения не должны триггерить создание дубля
+    if (isEmptyMessage) {
+      this.logger.debug(`⏭️ Empty message — skipping new lead creation for ${phone}`);
+      return { status: 'skipped', reason: 'empty_message', phone };
+    }
+
     // Загружаем все сообщения клиента за 24ч (включая текущее)
     const prevMessages = await this.prisma.message.findMany({
       where: { clientId: client.id, createdAt: { gte: oneDayAgo } },
       orderBy: { createdAt: 'asc' },
     });
     const fullContext = prevMessages.map((m) => m.message).join('\n');
+    // FIX: для matchOffer используем только INCOMING чтобы слова оператора не влияли
+    const incomingContext = prevMessages
+      .filter((m) => m.direction === 'INCOMING')
+      .map((m) => m.message)
+      .join('\n');
 
-    const priceResult  = this.extractPrice(fullContext);
-    const offerMatch   = await this.matchOffer(fullContext, priceResult?.price);
+    const priceResult  = this.extractPrice(incomingContext);
+    const offerMatch   = await this.matchOffer(incomingContext, priceResult?.price);
     const parsedDate   = this.extractDate(fullContext);
     const parsedTime   = this.extractTime(fullContext);
     const result       = this.determineResult(fullContext);
@@ -267,10 +296,15 @@ export class WhatsAppParserService {
             orderBy: { createdAt: 'asc' },
           });
           const fullConversation = allMessages.map((m) => m.message).join('\n');
+          // FIX: для matchOffer только INCOMING
+          const incomingConv = allMessages
+            .filter((m) => m.direction === 'INCOMING')
+            .map((m) => m.message)
+            .join('\n');
 
           // Reparse with full context
-          const ctxOffer = await this.matchOffer(fullConversation, this.extractPrice(fullConversation)?.price);
-          const ctxPrice = this.extractPrice(fullConversation);
+          const ctxOffer = await this.matchOffer(incomingConv, this.extractPrice(incomingConv)?.price);
+          const ctxPrice = this.extractPrice(incomingConv);
           const ctxDate = this.extractDate(fullConversation);
           const ctxTime = this.extractTime(fullConversation);
           const ctxResult = this.determineResult(fullConversation);
@@ -437,6 +471,19 @@ export class WhatsAppParserService {
     if (/(^|\s)(суббот[ау]?|сенбі|сенби)(\s|$)/.test(t))      return dayOfWeekOffset(6);
     if (/(^|\s)(воскресенье|жексенбі|жексенби)(\s|$)/.test(t)) return dayOfWeekOffset(0);
 
+    // FIX: формат DD.MM — "22.08", "24.08" и т.д. — ищем ДО extractTime
+    const dotDateMatches = [...t.matchAll(/\b(\d{1,2})\.(\d{2})\b/g)];
+    for (const dm of dotDateMatches) {
+      const day = parseInt(dm[1], 10);
+      const month = parseInt(dm[2], 10);
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        const year = todayDate.getFullYear();
+        const d = new Date(year, month - 1, day);
+        if (d < todayDate) d.setFullYear(year + 1);
+        return d.toISOString().split('T')[0];
+      }
+    }
+
     // "15 августа" / "15 авг" и т.д.
     const months: Record<string, number> = {
       'январ': 1, 'феврал': 2, 'март': 3, 'апрел': 4,
@@ -455,6 +502,24 @@ export class WhatsAppParserService {
       }
     }
 
+    // FIX: формат DD.MM — "22.08", "24.08" и т.д.
+    // Ищем паттерн: 1-2 цифры ТОЧКА 2 цифры (месяц 01-12)
+    const dotDateMatch = t.match(/\b(\d{1,2})\.(\d{2})\b/g);
+    if (dotDateMatch) {
+      for (const dm of dotDateMatch) {
+        const parts = dm.split('.');
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        // Валидная дата: день 1-31, месяц 1-12
+        if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+          const year = todayDate.getFullYear();
+          const d = new Date(year, month - 1, day);
+          if (d < todayDate) d.setFullYear(year + 1);
+          return d.toISOString().split('T')[0];
+        }
+      }
+    }
+
     return null;
   }
 
@@ -462,35 +527,52 @@ export class WhatsAppParserService {
    * TIME EXTRACTOR — отдельный метод для parsedTime.
    * Возвращает "HH:MM" или null.
    * НЕ смешивается с ценой (цена 3990 не попадёт сюда).
+   * 
+   * FIX: различаем дату DD.MM и время HH:MM:
+   * - "22.08" → дата (месяц 01-12, день > 12 часто)
+   * - "14:30" → время (разделитель ":")
+   * - "18.30" → НЕОДНОЗНАЧНО → считаем временем только если h <= 23 AND m в {00,15,30,45}
    */
   extractTime(text: string): string | null {
     if (!text) return null;
     const t = text.toLowerCase().replace(/ё/g, 'е');
 
-    // Формат "16:00" / "09:30" / "19.30" / "19;30" / "19-30" / "17,30"
-    // Поддерживаем разделители: : . ; - ,
-    // ВАЖНО: Ищем ВСЕ совпадения и берём первое валидное ВРЕМЯ (не дату)
-    const allMatches = t.matchAll(/(\d{1,2})[:\.;,\-](\d{2})(?!\d)/g);
-    for (const match of allMatches) {
+    // Шаг 1: Сначала найдём ВСЕ даты формата DD.MM чтобы исключить их
+    const knownDates = new Set<string>();
+    const dateMatches = t.matchAll(/\b(\d{1,2})\.(\d{2})\b/g);
+    for (const dm of dateMatches) {
+      const day = parseInt(dm[1], 10);
+      const month = parseInt(dm[2], 10);
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        knownDates.add(dm[0]); // "22.08", "24.08" и т.д.
+      }
+    }
+
+    // Шаг 2: Ищем ТОЛЬКО формат HH:MM с двоеточием — это всегда время!
+    const colonTimeMatches = t.matchAll(/(\d{1,2}):(\d{2})(?!\d)/g);
+    for (const match of colonTimeMatches) {
       const h = parseInt(match[1], 10);
       const m = parseInt(match[2], 10);
-      
-      // Пропускаем очевидные ДАТЫ (не время):
-      // Логика: если h > 12 И m <= 12 И m НЕ круглые минуты (не 00, 30)
-      // Примеры дат: 22.08, 20.08, 15.03 и т.д.
-      // Примеры НЕ дат: 13.00 (00 минуты - это время!), 18.30 (30 минуты)
-      const isRoundMinutes = (m === 0 || m === 30 || m === 15 || m === 45);
-      if (h > 12 && m <= 12 && !isRoundMinutes) {
-        continue; // Это скорее всего дата, пропускаем
-      }
-      
-      // Проверяем что это валидное время
       if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
         return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
       }
     }
 
-    // "в 16" / "в 9" — только если явно "в X" и X ≤ 23
+    // Шаг 3: Точка как разделитель HH.MM — только если НЕ дата
+    const dotTimeMatches = t.matchAll(/(\d{1,2})\.(\d{2})(?!\d)/g);
+    for (const match of dotTimeMatches) {
+      if (knownDates.has(match[0])) continue; // Пропускаем известные даты
+      const h = parseInt(match[1], 10);
+      const m = parseInt(match[2], 10);
+      // Округлённые минуты: 00, 15, 30, 45 — явный признак времени
+      const isRoundMinutes = (m === 0 || m === 15 || m === 30 || m === 45);
+      // Час от 6 до 23, минуты округлённые → это время
+      if (h >= 6 && h <= 23 && isRoundMinutes) {
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      }
+    }
+
+    // "в 16" / "в 9" — только если явно "в X" и X от 6 до 23
     const inTimeMatch = t.match(/(^|\s)в\s+(\d{1,2})(\s|$)/);
     if (inTimeMatch) {
       const h = parseInt(inTimeMatch[2], 10);
@@ -499,7 +581,7 @@ export class WhatsAppParserService {
       }
     }
 
-    // "сағат 16" / "сағат 4"
+    // "сағат 16" / "сағат 14"
     const sagatMatch = t.match(/сағат\s+(\d{1,2})/);
     if (sagatMatch) {
       const h = parseInt(sagatMatch[1], 10);
@@ -508,12 +590,10 @@ export class WhatsAppParserService {
       }
     }
 
-    // "4-те" / "4те" / "төртте" — казахские суффиксы времени
-    // Паттерн: цифра + опциональный дефис + казахский падежный суффикс
+    // "4-те" / "4те" — казахские суффиксы времени
     const kzTimeMatch = t.match(/(\d{1,2})-?(?:те|де|да|та)(?!\w)/);
     if (kzTimeMatch) {
       const h = parseInt(kzTimeMatch[1], 10);
-      // Только разумное время (не путаем с ценой типа 3990)
       if (h >= 1 && h <= 23) {
         return `${String(h).padStart(2, '0')}:00`;
       }
@@ -826,7 +906,6 @@ export class WhatsAppParserService {
       /пусть кому.?то повезет/,      // без ё
       /не беспокоит/,                // "пусть не беспокоит меня"
       /менеджер.{0,10}рыбак/,        // негатив про менеджеров
-      /не смогу(?!.*завтра|послезавтра)/,  // "не смогу" без конкретной даты
       // КАЗАХСКИЙ
       /келмеймін|келмеймин/,        // не приду
       /бармаймын|бармаймин/,        // не пойду
@@ -857,6 +936,13 @@ export class WhatsAppParserService {
       'повременю',                      // откладывает решение
       'на работе',                      // занят на работе
       'пока не могу',                   // временно не может
+      'напишу вам',                     // "напишу вам после отпуска"
+      'напишу после',                   // откладывает
+      'после отпуска',                  // откладывает на после отпуска
+      'буду посвободнее',               // занят сейчас
+      'потом напишу',                   // откладывает
+      'не смогу сегодня',               // только сегодня не может
+      'занята перед',                   // занята (временно)
     ];
 
     for (const p of UNKNOWN_PHRASES) {
