@@ -790,6 +790,11 @@ export class WhatsAppParserService {
     const realMessages = rawLines.slice(startIndex);
     const last2Messages = realMessages.slice(-2);
     const last2Text = last2Messages.join(' ').toLowerCase();
+    
+    // FIX: Определяем last3Text и allText ЗДЕСЬ, чтобы использовать ниже
+    const last3Messages = rawLines.slice(-3);
+    const last3Text = last3Messages.join(' | ').toLowerCase();
+    const allText = rawLines.join(' ').toLowerCase();
 
     this.logger.debug(`[LAST2] First is auto-ad: ${startIndex > 0}, real messages: ${realMessages.length}`);
     
@@ -802,10 +807,10 @@ export class WhatsAppParserService {
     }
     
     // ── 2.0. CITY/LOCATION CLARIFICATION (САМЫЙ ВЫСОКИЙ ПРИОРИТЕТ) ──────────
-    // АКТОБЕ = можно записать (наш город тоже)
-    // Другие города = UNKNOWN (слив)
-    const OTHER_CITIES = [
-      // АКТОБЕ УБРАН - это наш город!
+    // АКТОБЕ = можно записать (наш город)
+    // АЛМАТЫ, другие города = LOST (отказ по региону)
+    const REJECTION_CITIES = [
+      'алматы', 'алмата', 'алма-ата', 'алмати',
       'шымкент', 'шимкент',
       'караганда', 'қарағанды',
       'павлодар', 'семей', 'семипалатинск',
@@ -814,6 +819,7 @@ export class WhatsAppParserService {
       'усть-каменогорск', 'өскемен', 'oskemen',
       'кызылорда', 'қызылорда',
       'талдыкорган', 'туркестан', 'темиртау',
+      'астана', 'нұр-сұлтан', 'нур-султан',
     ];
     
     const LOCATION_PHRASES = [
@@ -829,19 +835,30 @@ export class WhatsAppParserService {
       'жазыламын', 'жазыңызшы', 'бекітіңіз', // казахские подтверждения
     ];
     
-    // Check ONLY last 2 messages for city mention
+    // Check ONLY last 2-3 messages for city rejection
     if (last2Messages.length > 0) {
-      // Check OTHER cities (not Aktobe/Almaty) - these are UNKNOWN (слив)
-      for (const city of OTHER_CITIES) {
+      // Check REJECTION cities (Almaty, Astana, etc.) - these are LOST (не обслуживаем)
+      for (const city of REJECTION_CITIES) {
         if (last2Text.includes(city)) {
-          // Check if there's explicit booking confirmation
-          const hasExplicitConfirmation = BOOKING_CONFIRMATIONS.some(phrase => last2Text.includes(phrase));
-          const hasTimeDate = /в\s*\d{1,2}[:.]?\d{0,2}|\d{1,2}\s*(числа|августа|сентября|октября|ноября|декабря)|ға$|ге$/i.test(last2Text);
+          // Проверяем: был ли ОТКАЗ от оператора в последних 3 сообщениях?
+          const rejectionContext = last3Text;
+          const hasRejectionPhrase = (
+            rejectionContext.includes('только для жителей актобе') ||
+            rejectionContext.includes('актюбинской области') ||
+            rejectionContext.includes('акция действует только для') ||
+            rejectionContext.includes('не оформляется') ||
+            rejectionContext.includes('не подходите') ||
+            rejectionContext.includes('не можем записать')
+          );
           
-          if (!hasExplicitConfirmation && !hasTimeDate) {
-            this.logger.log(`⏳ UNKNOWN | other city "${city}" in last 2 WITHOUT confirmation`);
-            return 'UNKNOWN';
+          if (hasRejectionPhrase) {
+            this.logger.log(`❌ LOST | rejection city "${city}" + operator refusal in last 3`);
+            return 'LOST';
           }
+          
+          // Если ТОЛЬКО название города без отказа → UNKNOWN (уточняем)
+          this.logger.log(`⏳ UNKNOWN | city "${city}" mentioned, but no refusal yet`);
+          return 'UNKNOWN';
         }
       }
       
@@ -879,17 +896,51 @@ export class WhatsAppParserService {
       }
     }
     
-    // ══════════════════════════════════════════════════════════════════════
-    // ПРАВИЛЬНАЯ ЛОГИКА: КОНТЕКСТ ВАЖЕН!
-    // ══════════════════════════════════════════════════════════════════════
-    // "НЕТ" само по себе ≠ ОТКАЗ! Это часто ответ на вопрос бота.
-    // Проверяем КОНТЕКСТ в последних 2-3 сообщениях.
-    
-    const last3Messages = rawLines.slice(-3);
-    const last3Text = last3Messages.join(' | ').toLowerCase();
-    const allText = rawLines.join(' ').toLowerCase();
-
     // ── 2.1. LOST: явный отказ в КОНТЕКСТЕ последних 3 сообщений ──────────
+    
+    // ═══════════════════════════════════════════════════════════════════════
+    // NEW: ОТКАЗ ПО ВОЗРАСТУ
+    // ═══════════════════════════════════════════════════════════════════════
+    // Проверяем: есть ли в истории ОТКАЗ по возрасту от оператора?
+    const AGE_REJECTION_PATTERNS = [
+      /до \d+ лет включительно/i,
+      /от \d+ до \d+ лет/i,
+      /на Вас запись.*не оформляется/i,
+      /не оформляется.*возраст/i,
+      /по условиям акции.*принимаем/i,
+      /не подходите по возрасту/i,
+      /возраст.*не подходит/i,
+    ];
+
+    for (const pattern of AGE_REJECTION_PATTERNS) {
+      if (pattern.test(last3Text)) {
+        this.logger.log(`❌ LOST | age rejection found in last 3: ${pattern}`);
+        return 'LOST';
+      }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════
+    // NEW: ОТМЕНА ЗАПИСИ КЛИЕНТОМ
+    // ═══════════════════════════════════════════════════════════════════════
+    const CANCELLATION_PATTERNS = [
+      /отмените.*запись/i,
+      /отменить.*запись/i,
+      /не получается.*отмените/i,
+      /не смогу.*отмените/i,
+      /отмен[яи]/i,
+      /передумал.*не приду/i,
+      /передумала.*не приду/i,
+      /извините.*не получается/i,
+      /извините.*отмените/i,
+    ];
+
+    for (const pattern of CANCELLATION_PATTERNS) {
+      if (pattern.test(lastMessage)) {
+        this.logger.log(`❌ LOST | cancellation request in last message: ${pattern}`);
+        return 'LOST';
+      }
+    }
+    
     const LOST_PATTERNS = [
       /не надо.*(не пишите|все на этом)/,
       /не нужно.*не нужно/, // повторение = явный отказ
