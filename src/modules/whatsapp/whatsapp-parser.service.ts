@@ -484,20 +484,32 @@ export class WhatsAppParserService {
       }
     }
 
-    // "15 августа" / "15 авг" и т.д.
+    // "15 августа" / "15 авг" / "2 сентябырьде" (казахский с окончанием) и т.д.
     const months: Record<string, number> = {
-      'январ': 1, 'феврал': 2, 'март': 3, 'апрел': 4,
-      'май': 5,   'мая': 5,   'июн': 6,  'июл': 7,
-      'август': 8,'сентябр': 9,'октябр': 10,'ноябр': 11,'декабр': 12,
+      'январ': 1, 'қаңтар': 1, 'кантар': 1,
+      'феврал': 2, 'ақпан': 2, 'акпан': 2,
+      'март': 3, 'наурыз': 3,
+      'апрел': 4, 'сәуір': 4, 'сауир': 4,
+      'май': 5, 'мая': 5, 'мамыр': 5,
+      'июн': 6, 'маусым': 6,
+      'июл': 7, 'шілде': 7, 'шилде': 7,
+      'август': 8, 'тамыз': 8,
+      'сентябр': 9, 'қыркүйек': 9, 'кыркуйек': 9,
+      'октябр': 10, 'қазан': 10, 'казан': 10,
+      'ноябр': 11, 'қараша': 11, 'караша': 11,
+      'декабр': 12, 'желтоқсан': 12, 'желтоксан': 12,
     };
     for (const [name, month] of Object.entries(months)) {
-      const re = new RegExp(`(\\d{1,2})\\s*(?:${name})`, 'i');
+      // FIX: ищем цифру + месяц с любыми окончаниями (де, да, та, ге и т.д.)
+      const re = new RegExp(`(\\d{1,2})\\s*${name}[а-яөұіңғүқһәёы]*`, 'i');
       const m = t.match(re);
       if (m) {
         const day = parseInt(m[1], 10);
         const year = todayDate.getFullYear();
         const d = new Date(year, month - 1, day);
-        if (d < todayDate) d.setFullYear(year + 1);
+        // FIX: если дата в прошлом (более 5 дней назад), считаем что это следующий год
+        const daysAgo = (todayDate.getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
+        if (daysAgo > 5) d.setFullYear(year + 1);
         return d.toISOString().split('T')[0];
       }
     }
@@ -822,6 +834,13 @@ export class WhatsAppParserService {
       'астана', 'нұр-сұлтан', 'нур-султан',
     ];
     
+    // NEW: Проверка "гость города" / "проездом"
+    const GUEST_PHRASES = [
+      'гость', 'гостья', 'гости',
+      'проездом', 'проезжаю',
+      'қонақ', 'конак', // казахский "гость"
+    ];
+    
     const LOCATION_PHRASES = [
       'проживаю в', 'живу в', 'я из', 'нахожусь в',
       'я в городе', 'я в области',
@@ -837,6 +856,26 @@ export class WhatsAppParserService {
     
     // Check ONLY last 2-3 messages for city rejection
     if (last2Messages.length > 0) {
+      // NEW: Check "гость города" / "проездом" - immediate LOST
+      for (const phrase of GUEST_PHRASES) {
+        if (last2Text.includes(phrase)) {
+          // Проверяем: был ли ОТКАЗ от оператора?
+          const rejectionContext = last3Text;
+          const hasRejectionPhrase = (
+            rejectionContext.includes('только для жителей актобе') ||
+            rejectionContext.includes('актюбинской области') ||
+            rejectionContext.includes('акция действует только для') ||
+            rejectionContext.includes('для гостей не действует') ||
+            rejectionContext.includes('для гостей города не действует')
+          );
+          
+          if (hasRejectionPhrase) {
+            this.logger.log(`❌ LOST | guest phrase "${phrase}" + operator refusal`);
+            return 'LOST';
+          }
+        }
+      }
+      
       // Check REJECTION cities (Almaty, Astana, etc.) - these are LOST (не обслуживаем)
       for (const city of REJECTION_CITIES) {
         if (last2Text.includes(city)) {
