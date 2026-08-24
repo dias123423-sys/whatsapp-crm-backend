@@ -1,534 +1,0 @@
-🚀 Full deployment to 188.241.217.76...
-📦 Installing Node.js...
-[38;5;79m2026-08-08 05:32:33 - Installing pre-requisites[0m
-
-WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
-
-Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease
-Hit:2 http://security.ubuntu.com/ubuntu noble-security InRelease
-Hit:3 http://archive.ubuntu.com/ubuntu noble-updates InRelease
-Hit:4 http://archive.ubuntu.com/ubuntu noble-backports InRelease
-Hit:5 https://download.docker.com/linux/ubuntu noble InRelease
-Reading package lists...
-Building dependency tree...
-Reading state information...
-178 packages can be upgraded. Run 'apt list --upgradable' to see them.
-Reading package lists...
-Building dependency tree...
-WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
-
-
-Reading state information...
-ca-certificates is already the newest version (20260601~24.04.1).
-curl is already the newest version (8.5.0-2ubuntu10.11).
-gnupg is already the newest version (2.4.4-2ubuntu17.4).
-gnupg set to manually installed.
-Suggested packages:
-  apt-doc aptitude | synaptic | wajig dpkg-dev
-The following NEW packages will be installed:
-  apt-transport-https
-The following packages will be upgraded:
-  apt apt-utils libapt-pkg6.0t64
-3 upgraded, 1 newly installed, 0 to remove and 175 not upgraded.
-Need to get 2580 kB of archives.
-After this operation, 47.1 kB of additional disk space will be used.
-Get:1 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libapt-pkg6.0t64 amd64 2.8.3 [985 kB]
-Get:2 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 apt amd64 2.8.3 [1376 kB]
-Get:3 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 apt-utils amd64 2.8.3 [216 kB]
-Get:4 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 apt-transport-https all 2.8.3 [3970 B]
-debconf: unable to initialize frontend: Dialog
-debconf: (TERM is not set, so the dialog frontend is not usable.)
-debconf: falling back to frontend: Readline
-debconf: unable to initialize frontend: Readline
-debconf: (This frontend requires a controlling tty.)
-debconf: falling back to frontend: Teletype
-dpkg-preconfigure: unable to re-open stdin: 
-Fetched 2580 kB in 1s (2737 kB/s)
-(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 120815 files and directories currently installed.)
-Preparing to unpack .../libapt-pkg6.0t64_2.8.3_amd64.deb ...
-Unpacking libapt-pkg6.0t64:amd64 (2.8.3) over (2.7.14build2) ...
-Setting up libapt-pkg6.0t64:amd64 (2.8.3) ...
-(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 120815 files and directories currently installed.)
-Preparing to unpack .../archives/apt_2.8.3_amd64.deb ...
-Unpacking apt (2.8.3) over (2.7.14build2) ...
-Setting up apt (2.8.3) ...
-(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 120815 files and directories currently installed.)
-Preparing to unpack .../apt-utils_2.8.3_amd64.deb ...
-Unpacking apt-utils (2.8.3) over (2.7.14build2) ...
-Selecting previously unselected package apt-transport-https.
-Preparing to unpack .../apt-transport-https_2.8.3_all.deb ...
-Unpacking apt-transport-https (2.8.3) ...
-Setting up apt-utils (2.8.3) ...
-Setting up apt-transport-https (2.8.3) ...
-Processing triggers for man-db (2.12.0-4build2) ...
-Processing triggers for libc-bin (2.39-0ubuntu8.8) ...
-debconf: unable to initialize frontend: Dialog
-debconf: (TERM is not set, so the dialog frontend is not usable.)
-debconf: falling back to frontend: Readline
-debconf: unable to initialize frontend: Readline
-debconf: (This frontend requires a controlling tty.)
-debconf: falling back to frontend: Teletype
-
-Restarting services...
- systemctl restart packagekit.service
-
-Service restarts being deferred:
- systemctl restart NetworkManager.service
- /etc/needrestart/restart.d/dbus.service
- systemctl restart docker.service
- systemctl restart getty@tty1.service
- systemctl restart systemd-logind.service
- systemctl restart unattended-upgrades.service
-
-No containers need to be restarted.
-
-User sessions running outdated binaries:
- root @ session #936: apt[795979], bash[795674]
- root @ user manager service: systemd[241429]
-
-No VM guests are running outdated hypervisor (qemu) binaries on this host.
-Pending kernel upgrade
-----------------------
-
-Newer kernel available
-
-The currently running kernel version is 6.8.0-31-generic which is not the 
-expected kernel version 6.8.0-137-generic.
-
-Restarting the system to load the new kernel will not be handled automatically, 
-so you should consider rebooting.
-
-
-WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
-
-Get:1 https://deb.nodesource.com/node_20.x nodistro InRelease [12.1 kB]
-Hit:2 http://archive.ubuntu.com/ubuntu noble InRelease
-Get:3 https://deb.nodesource.com/node_20.x nodistro/main amd64 Packages [14.4 kB]
-Hit:4 http://archive.ubuntu.com/ubuntu noble-updates InRelease
-Hit:5 http://archive.ubuntu.com/ubuntu noble-backports InRelease
-Hit:6 http://security.ubuntu.com/ubuntu noble-security InRelease
-Hit:7 https://download.docker.com/linux/ubuntu noble InRelease
-Fetched 26.6 kB in 1s (20.0 kB/s)
-Reading package lists...
-Building dependency tree...
-Reading state information...
-175 packages can be upgraded. Run 'apt list --upgradable' to see them.
-[1;34m2026-08-08 05:32:46 - Repository configured successfully.[0m
-[38;5;79m2026-08-08 05:32:46 - To install Node.js, run: apt install nodejs -y[0m
-[38;5;79m2026-08-08 05:32:46 - You can use N|solid Runtime as a node.js alternative[0m
-[1;32m2026-08-08 05:32:46 - To install N|solid Runtime, run: apt install nsolid -y 
-[0m
-Reading package lists...
-Building dependency tree...
-Reading state information...
-The following NEW packages will be installed:
-  nodejs
-0 upgraded, 1 newly installed, 0 to remove and 175 not upgraded.
-Need to get 32.2 MB of archives.
-After this operation, 196 MB of additional disk space will be used.
-Get:1 https://deb.nodesource.com/node_20.x nodistro/main amd64 nodejs amd64 20.20.2-1nodesource1 [32.2 MB]
-debconf: unable to initialize frontend: Dialog
-debconf: (TERM is not set, so the dialog frontend is not usable.)
-debconf: falling back to frontend: Readline
-debconf: unable to initialize frontend: Readline
-debconf: (This frontend requires a controlling tty.)
-debconf: falling back to frontend: Teletype
-dpkg-preconfigure: unable to re-open stdin: 
-Fetched 32.2 MB in 3s (10.7 MB/s)
-Selecting previously unselected package nodejs.
-(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 120819 files and directories currently installed.)
-Preparing to unpack .../nodejs_20.20.2-1nodesource1_amd64.deb ...
-Unpacking nodejs (20.20.2-1nodesource1) ...
-Setting up nodejs (20.20.2-1nodesource1) ...
-Processing triggers for man-db (2.12.0-4build2) ...
-debconf: unable to initialize frontend: Dialog
-debconf: (TERM is not set, so the dialog frontend is not usable.)
-debconf: falling back to frontend: Readline
-debconf: unable to initialize frontend: Readline
-debconf: (This frontend requires a controlling tty.)
-debconf: falling back to frontend: Teletype
-
-Restarting services...
-
-Service restarts being deferred:
- systemctl restart NetworkManager.service
- /etc/needrestart/restart.d/dbus.service
- systemctl restart docker.service
- systemctl restart getty@tty1.service
- systemctl restart systemd-logind.service
- systemctl restart unattended-upgrades.service
-
-No containers need to be restarted.
-
-User sessions running outdated binaries:
- root @ user manager service: systemd[241429]
-
-Pending kernel upgrade
-----------------------
-
-Newer kernel available
-
-The currently running kernel version is 6.8.0-31-generic which is not the 
-expected kernel version 6.8.0-137-generic.
-
-Restarting the system to load the new kernel will not be handled automatically, 
-so you should consider rebooting.
-
-No VM guests are running outdated hypervisor (qemu) binaries on this host.
-📦 Installing PM2...
-
-added 77 packages in 9s
-
-8 packages are looking for funding
-  run `npm fund` for details
-📁 Cloning repository...
-npm notice
-npm notice New major version of npm available! 10.8.2 -> 12.0.2
-npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.0.2
-npm notice To update run: npm install -g npm@12.0.2
-npm notice
-Already up to date.
-📝 Creating .env...
-📦 Installing...
-npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
-npm warn deprecated fstream@1.0.12: This package is no longer supported.
-npm warn deprecated superagent@8.1.2: Please upgrade to superagent v10.2.2+, see release notes at https://github.com/forwardemail/superagent/releases/tag/v10.2.2 - maintenance is supported by Forward Email @ https://forwardemail.net
-npm warn deprecated are-we-there-yet@2.0.0: This package is no longer supported.
-npm warn deprecated gauge@3.0.2: This package is no longer supported.
-npm warn deprecated lodash.isequal@4.5.0: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
-npm warn deprecated cron-parser@4.9.0: v4 is no longer maintained, upgrade to v5
-npm warn deprecated @humanwhocodes/object-schema@2.0.3: Use @eslint/object-schema instead
-npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
-npm warn deprecated npmlog@5.0.1: This package is no longer supported.
-npm warn deprecated @humanwhocodes/config-array@0.13.0: Use @eslint/config-array instead
-npm warn deprecated tar@6.2.1: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
-npm warn deprecated supertest@6.3.4: Please upgrade to supertest v7.1.3+, see release notes at https://github.com/forwardemail/supertest/releases/tag/v7.1.3 - maintenance is supported by Forward Email @ https://forwardemail.net
-npm warn deprecated glob@10.4.5: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
-npm warn deprecated eslint@8.57.1: This version is no longer supported. Please see https://eslint.org/version-support for other options.
-npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
-npm warn deprecated rimraf@2.7.1: Rimraf versions prior to v4 are no longer supported
-npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
-npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
-npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
-npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
-npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
-npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
-npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
-npm warn deprecated uuid@8.3.2: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
-npm warn deprecated uuid@8.3.2: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
-
-added 947 packages, and audited 948 packages in 5m
-
-140 packages are looking for funding
-  run `npm fund` for details
-
-42 vulnerabilities (3 low, 22 moderate, 16 high, 1 critical)
-
-To address issues that do not require attention, run:
-  npm audit fix
-
-To address all issues (including breaking changes), run:
-  npm audit fix --force
-
-Run `npm audit` for details.
-🔨 Building...
-
-> whatsapp-lead-crm-backend@1.0.0 build
-> nest build
-
-[1m[31mERROR[39m[22m in [1m./src/app.module.ts[39m[22m [1m[32m14:16-40[39m[22m
-[1mModule [1m[31mnot found[39m[22m[1m: [1m[31mError[39m[22m[1m: Can't resolve '@nestjs/axios' in '/var/www/whatsapp-crm/src'[39m[22m
- @ ./src/main.ts 7:21-44
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/evolution-api.service.ts[39m[22m [1m[32m16:16-40[39m[22m
-[1mModule [1m[31mnot found[39m[22m[1m: [1m[31mError[39m[22m[1m: Can't resolve '@nestjs/axios' in '/var/www/whatsapp-crm/src/modules/whatsapp'[39m[22m
- @ ./src/modules/whatsapp/whatsapp.module.ts 14:32-66
- @ ./src/app.module.ts 22:26-71
- @ ./src/main.ts 7:21-44
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/whatsapp.module.ts[39m[22m [1m[32m11:16-40[39m[22m
-[1mModule [1m[31mnot found[39m[22m[1m: [1m[31mError[39m[22m[1m: Can't resolve '@nestjs/axios' in '/var/www/whatsapp-crm/src/modules/whatsapp'[39m[22m
- @ ./src/app.module.ts 22:26-71
- @ ./src/main.ts 7:21-44
-
-[1m[31mERROR[39m[22m in [1m./src/app.module.ts:5:28[39m[22m
-[1mTS2307: Cannot find module '@nestjs/axios' or its corresponding type declarations.
-    3 | import { BullModule } from '@nestjs/bull';
-    4 | import { ScheduleModule } from '@nestjs/schedule';
-  > 5 | import { HttpModule } from '@nestjs/axios';
-      |                            ^^^^^^^^^^^^^^^
-    6 |
-    7 | // Core modules
-    8 | import { PrismaModule } from './common/prisma/prisma.module';[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/auth/auth.service.ts:142:52[39m[22m
-[1mTS2345: Argument of type '{ where: { id: string; }; include: { operator: true; }; select: { id: true; email: true; name: true; phone: true; role: true; active: true; createdAt: true; operator: { select: { id: true; currentLeads: true; totalLeads: true; totalCalls: true; totalBooked: true; active: true; }; }; }; }' is not assignable to parameter of type 'SelectSubset<{ where: { id: string; }; include: { operator: true; }; select: { id: true; email: true; name: true; phone: true; role: true; active: true; createdAt: true; operator: { select: { id: true; currentLeads: true; totalLeads: true; totalCalls: true; totalBooked: true; active: true; }; }; }; }, UserFindUnique...'.
-  Type '{ where: { id: string; }; include: { operator: true; }; select: { id: true; email: true; name: true; phone: true; role: true; active: true; createdAt: true; operator: { select: { id: true; currentLeads: true; totalLeads: true; totalCalls: true; totalBooked: true; active: true; }; }; }; }' is not assignable to type '"Please either choose `select` or `include`."'.
-    140 |
-    141 |   async getProfile(userId: string) {
-  > 142 |     const user = await this.prisma.user.findUnique({
-        |                                                    ^
-  > 143 |       where: { id: userId },
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 144 |       include: {
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 145 |         operator: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 146 |       },
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 147 |       select: {
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 148 |         id: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 149 |         email: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 150 |         name: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 151 |         phone: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 152 |         role: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 153 |         active: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 154 |         createdAt: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 155 |         operator: {
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 156 |           select: {
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 157 |             id: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 158 |             currentLeads: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 159 |             totalLeads: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 160 |             totalCalls: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 161 |             totalBooked: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 162 |             active: true,
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 163 |           },
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 164 |         },
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 165 |       },
-        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  > 166 |     });
-        | ^^^^^^
-    167 |
-    168 |     if (!user) {
-    169 |       throw new UnauthorizedException('User [1m[31mnot found[39m[22m[1m');[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/clients/clients.service.ts:207:13[39m[22m
-[1mTS2353: Object literal may only specify known properties, and 'calls' does not exist in type 'LeadInclude<DefaultArgs>'.
-    205 |             },
-    206 |             procedure: true,
-  > 207 |             calls: true,
-        |             ^^^^^
-    208 |           },
-    209 |           orderBy: {
-    210 |             createdAt: 'desc',[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/clients/clients.service.ts:234:12[39m[22m
-[1mTS2339: Property 'leads' does not exist on type '{ name: string; email: string; phone: string; id: string; createdAt: Date; updatedAt: Date; notes: string; whatsappName: string; }'.
-    232 |
-    233 |     // Add leads
-  > 234 |     client.leads.forEach((lead) => {
-        |            ^^^^^
-    235 |       timeline.push({
-    236 |         type: 'lead',
-    237 |         date: lead.createdAt,[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/clients/clients.service.ts:243:12[39m[22m
-[1mTS2339: Property 'messages' does not exist on type '{ name: string; email: string; phone: string; id: string; createdAt: Date; updatedAt: Date; notes: string; whatsappName: string; }'.
-    241 |
-    242 |     // Add messages
-  > 243 |     client.messages.forEach((message) => {
-        |            ^^^^^^^^
-    244 |       timeline.push({
-    245 |         type: 'message',
-    246 |         date: message.createdAt,[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/clients/clients.service.ts:252:12[39m[22m
-[1mTS2339: Property 'appointments' does not exist on type '{ name: string; email: string; phone: string; id: string; createdAt: Date; updatedAt: Date; notes: string; whatsappName: string; }'.
-    250 |
-    251 |     // Add appointments
-  > 252 |     client.appointments.forEach((appointment) => {
-        |            ^^^^^^^^^^^^
-    253 |       timeline.push({
-    254 |         type: 'appointment',
-    255 |         date: appointment.createdAt,[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/leads/leads.service.ts:92:11[39m[22m
-[1mTS2353: Object literal may only specify known properties, and 'where' does not exist in type 'UserDefaultArgs<DefaultArgs>'.
-    90 |       include: {
-    91 |         user: {
-  > 92 |           where: { active: true },
-       |           ^^^^^
-    93 |         },
-    94 |       },
-    95 |       orderBy: { createdAt: 'asc' },[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/leads/leads.service.ts:120:11[39m[22m
-[1mTS2353: Object literal may only specify known properties, and 'where' does not exist in type 'UserDefaultArgs<DefaultArgs>'.
-    118 |       include: {
-    119 |         user: {
-  > 120 |           where: { active: true },
-        |           ^^^^^
-    121 |         },
-    122 |       },
-    123 |       orderBy: { currentLeads: 'asc' },[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/leads/leads.service.ts:195:15[39m[22m
-[1mTS2353: Object literal may only specify known properties, and 'calls' does not exist in type 'LeadCountOutputTypeSelect<DefaultArgs>'.
-    193 |           _count: {
-    194 |             select: {
-  > 195 |               calls: true,
-        |               ^^^^^
-    196 |               appointments: true,
-    197 |             },
-    198 |           },[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/leads/leads.service.ts:246:9[39m[22m
-[1mTS2353: Object literal may only specify known properties, and 'calls' does not exist in type 'LeadInclude<DefaultArgs>'.
-    244 |         },
-    245 |         procedure: true,
-  > 246 |         calls: {
-        |         ^^^^^
-    247 |           include: {
-    248 |             operator: {
-    249 |               select: {[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/leads/leads.service.ts:454:13[39m[22m
-[1mTS2353: Object literal may only specify known properties, and 'calls' does not exist in type 'LeadCountOutputTypeSelect<DefaultArgs>'.
-    452 |         _count: {
-    453 |           select: {
-  > 454 |             calls: true,
-        |             ^^^^^
-    455 |           },
-    456 |         },
-    457 |       },[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/operators/operators.service.ts:161:42[39m[22m
-[1mTS2339: Property 'call' does not exist on type 'PrismaService'.
-    159 |     });
-    160 |
-  > 161 |     const todayCalls = await this.prisma.call.count({
-        |                                          ^^^^
-    162 |       where: {
-    163 |         operatorId: operator.userId,
-    164 |         createdAt: {[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/operators/operators.service.ts:216:19[39m[22m
-[1mTS2339: Property 'call' does not exist on type 'PrismaService'.
-    214 |       this.prisma.lead.count({ where }),
-    215 |       this.prisma.lead.count({ where: { ...where, status: LeadStatus.BOOKED } }),
-  > 216 |       this.prisma.call.count({
-        |                   ^^^^
-    217 |         where: {
-    218 |           operatorId: operator.userId,
-    219 |           ...(where.createdAt && { createdAt: where.createdAt }),[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/evolution-api.service.ts:2:29[39m[22m
-[1mTS2307: Cannot find module '@nestjs/axios' or its corresponding type declarations.
-    1 | import { Injectable, Logger } from '@nestjs/common';
-  > 2 | import { HttpService } from '@nestjs/axios';
-      |                             ^^^^^^^^^^^^^^^
-    3 | import { ConfigService } from '@nestjs/config';
-    4 | import { firstValueFrom } from 'rxjs';
-    5 |[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/evolution-api.service.ts:41:23[39m[22m
-[1mTS2339: Property 'data' does not exist on type 'unknown'.
-    39 |       );
-    40 |
-  > 41 |       return response.data;
-       |                       ^^^^
-    42 |     } catch ([1m[31merror[39m[22m[1m) {
-    43 |       this.logger.[1m[31merror[39m[22m[1m('[1m[31mFailed[39m[22m[1m to get instance status', [1m[31merror[39m[22m[1m.response?.data || [1m[31merror[39m[22m[1m.message);
-    44 |       throw [1m[31merror[39m[22m[1m;[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/evolution-api.service.ts:77:23[39m[22m
-[1mTS2339: Property 'data' does not exist on type 'unknown'.
-    75 |
-    76 |       this.logger.log(`Instance created: ${instanceName}`);
-  > 77 |       return response.data;
-       |                       ^^^^
-    78 |     } catch ([1m[31merror[39m[22m[1m) {
-    79 |       this.logger.[1m[31merror[39m[22m[1m('[1m[31mFailed[39m[22m[1m to create instance', [1m[31merror[39m[22m[1m.response?.data || [1m[31merror[39m[22m[1m.message);
-    80 |       throw [1m[31merror[39m[22m[1m;[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/evolution-api.service.ts:97:23[39m[22m
-[1mTS2339: Property 'data' does not exist on type 'unknown'.
-     95 |
-     96 |       this.logger.log(`Instance connecting: ${instance}`);
-  >  97 |       return response.data;
-        |                       ^^^^
-     98 |     } catch ([1m[31merror[39m[22m[1m) {
-     99 |       this.logger.[1m[31merror[39m[22m[1m('[1m[31mFailed[39m[22m[1m to connect instance', [1m[31merror[39m[22m[1m.response?.data || [1m[31merror[39m[22m[1m.message);
-    100 |       throw [1m[31merror[39m[22m[1m;[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/evolution-api.service.ts:117:23[39m[22m
-[1mTS2339: Property 'data' does not exist on type 'unknown'.
-    115 |
-    116 |       this.logger.log(`Instance logged out: ${instance}`);
-  > 117 |       return response.data;
-        |                       ^^^^
-    118 |     } catch ([1m[31merror[39m[22m[1m) {
-    119 |       this.logger.[1m[31merror[39m[22m[1m('[1m[31mFailed[39m[22m[1m to logout instance', [1m[31merror[39m[22m[1m.response?.data || [1m[31merror[39m[22m[1m.message);
-    120 |       throw [1m[31merror[39m[22m[1m;[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/evolution-api.service.ts:149:23[39m[22m
-[1mTS2339: Property 'data' does not exist on type 'unknown'.
-    147 |
-    148 |       this.logger.log(`Message sent to ${phone}`);
-  > 149 |       return response.data;
-        |                       ^^^^
-    150 |     } catch ([1m[31merror[39m[22m[1m) {
-    151 |       this.logger.[1m[31merror[39m[22m[1m('[1m[31mFailed[39m[22m[1m to send message', [1m[31merror[39m[22m[1m.response?.data || [1m[31merror[39m[22m[1m.message);
-    152 |       throw [1m[31merror[39m[22m[1m;[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/evolution-api.service.ts:182:23[39m[22m
-[1mTS2339: Property 'data' does not exist on type 'unknown'.
-    180 |
-    181 |       this.logger.log(`Webhook set for ${instance}: ${webhookUrl}`);
-  > 182 |       return response.data;
-        |                       ^^^^
-    183 |     } catch ([1m[31merror[39m[22m[1m) {
-    184 |       this.logger.[1m[31merror[39m[22m[1m('[1m[31mFailed[39m[22m[1m to set webhook', [1m[31merror[39m[22m[1m.response?.data || [1m[31merror[39m[22m[1m.message);
-    185 |       throw [1m[31merror[39m[22m[1m;[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/evolution-api.service.ts:205:23[39m[22m
-[1mTS2339: Property 'data' does not exist on type 'unknown'.
-    203 |       );
-    204 |
-  > 205 |       return response.data;
-        |                       ^^^^
-    206 |     } catch ([1m[31merror[39m[22m[1m) {
-    207 |       this.logger.warn(`[1m[31mFailed[39m[22m[1m to get profile picture for ${phone}`);
-    208 |       return null;[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/evolution-api.service.ts:223:23[39m[22m
-[1mTS2339: Property 'data' does not exist on type 'unknown'.
-    221 |       );
-    222 |
-  > 223 |       return response.data;
-        |                       ^^^^
-    224 |     } catch ([1m[31merror[39m[22m[1m) {
-    225 |       this.logger.[1m[31merror[39m[22m[1m('[1m[31mFailed[39m[22m[1m to fetch instances', [1m[31merror[39m[22m[1m.response?.data || [1m[31merror[39m[22m[1m.message);
-    226 |       throw [1m[31merror[39m[22m[1m;[39m[22m
-
-[1m[31mERROR[39m[22m in [1m./src/modules/whatsapp/whatsapp.module.ts:2:28[39m[22m
-[1mTS2307: Cannot find module '@nestjs/axios' or its corresponding type declarations.
-    1 | import { Module } from '@nestjs/common';
-  > 2 | import { HttpModule } from '@nestjs/axios';
-      |                            ^^^^^^^^^^^^^^^
-    3 | import { WhatsAppController } from './whatsapp.controller';
-    4 | import { WhatsAppService } from './whatsapp.service';
-    5 | import { EvolutionApiService } from './evolution-api.service';[39m[22m
-
-[1m[33m3 errors have detailed information that is not shown.
-Use 'stats.errorDetails: true' resp. '--stats-error-details' to show it.[39m[22m
-
-webpack 5.97.1 compiled with [1m[31m26 errors[39m[22m in 9194 ms
