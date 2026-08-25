@@ -353,6 +353,10 @@ export class WhatsAppParserService {
    * DATE EXTRACTOR — отдельный метод для parsedDate.
    * Возвращает ISO строку "YYYY-MM-DD" или null.
    * НЕ смешивается с ценой.
+   * 
+   * FIX (Deploy #32):
+   * - Добавлен парсинг "27 го" = 27 августа
+   * - Улучшена точность определения дат
    */
   extractDate(text: string): string | null {
     if (!text) return null;
@@ -399,6 +403,20 @@ export class WhatsAppParserService {
     if (/(^|\s)(суббот[ау]?|сенбі|сенби)(\s|$)/.test(t))      return dayOfWeekOffset(6);
     if (/(^|\s)(воскресенье|жексенбі|жексенби)(\s|$)/.test(t)) return dayOfWeekOffset(0);
 
+    // FIX: "27 го" = 27 августа (текущий месяц)
+    const goMatch = t.match(/(\d{1,2})\s*го(?:\s|$)/);
+    if (goMatch) {
+      const day = parseInt(goMatch[1], 10);
+      if (day >= 1 && day <= 31) {
+        const year = todayDate.getFullYear();
+        const month = todayDate.getMonth();
+        const d = new Date(year, month, day);
+        // Если дата в прошлом, берем следующий месяц
+        if (d < todayDate) d.setMonth(month + 1);
+        return d.toISOString().split('T')[0];
+      }
+    }
+
     // FIX: формат DD.MM — "22.08", "24.08" и т.д. — ищем ДО extractTime
     const dotDateMatches = [...t.matchAll(/\b(\d{1,2})\.(\d{2})\b/g)];
     for (const dm of dotDateMatches) {
@@ -439,24 +457,6 @@ export class WhatsAppParserService {
         const daysAgo = (todayDate.getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
         if (daysAgo > 5) d.setFullYear(year + 1);
         return d.toISOString().split('T')[0];
-      }
-    }
-
-    // FIX: формат DD.MM — "22.08", "24.08" и т.д.
-    // Ищем паттерн: 1-2 цифры ТОЧКА 2 цифры (месяц 01-12)
-    const dotDateMatch = t.match(/\b(\d{1,2})\.(\d{2})\b/g);
-    if (dotDateMatch) {
-      for (const dm of dotDateMatch) {
-        const parts = dm.split('.');
-        const day = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10);
-        // Валидная дата: день 1-31, месяц 1-12
-        if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-          const year = todayDate.getFullYear();
-          const d = new Date(year, month - 1, day);
-          if (d < todayDate) d.setFullYear(year + 1);
-          return d.toISOString().split('T')[0];
-        }
       }
     }
 
@@ -786,25 +786,64 @@ export class WhatsAppParserService {
   /**
    * Извлекает возраст из сообщений клиента
    * Примеры: "58", "28 лет", "мне 21 год", "19", "1954 год", "52 года"
+   * 
+   * FIX (Deploy #32): Улучшена точность - НЕ парсим вопросы оператора!
+   * Парсим только ОТВЕТЫ клиента (INCOMING после вопроса про возраст)
    */
   extractAge(text: string): number | null {
     if (!text) return null;
 
-    const t = text.toLowerCase();
+    const lines = text.split('\n').filter(Boolean);
+    
+    // Проходим по всем строкам и ищем паттерн: вопрос про возраст → ответ
+    for (let i = 0; i < lines.length - 1; i++) {
+      const line = lines[i].toLowerCase();
+      const nextLine = lines[i + 1].toLowerCase();
+      
+      // Пропускаем вопросы оператора с "возраст" 
+      if (line.startsWith('outgoing:') && /возраст|жас|сколько.*лет/.test(line)) {
+        // Следующая строка должна быть от клиента
+        if (nextLine.startsWith('incoming:')) {
+          const answer = nextLine.replace(/^incoming:\s*/i, '').trim();
+          
+          // Проверяем что это число, а не вопрос
+          if (/^\d{2}$/.test(answer)) {
+            const age = parseInt(answer, 10);
+            if (age >= 15 && age <= 99) {
+              return age;
+            }
+          }
+          
+          // "28 лет", "52 года"
+          const ageMatch = answer.match(/^(\d{2})\s*(?:лет|год|жас|года)$/);
+          if (ageMatch) {
+            const age = parseInt(ageMatch[1], 10);
+            if (age >= 15 && age <= 99) {
+              return age;
+            }
+          }
+        }
+      }
+    }
 
-    // Паттерны для возраста
+    // Fallback: ищем по всему тексту (но БЕЗ вопросов)
+    const t = text.toLowerCase();
+    
+    // НЕ парсим если это вопрос оператора
+    if (/с какого возраста|до какого возраста|сколько вам лет/.test(t)) {
+      return null;
+    }
+
+    // Паттерны для возраста в тексте
     const patterns = [
-      /(?:мне|возраст)\s*(\d{2})\s*(?:лет|год|жас)/i,  // "мне 28 лет", "возраст 58"
-      /(\d{2})\s*(?:лет|год|жас|года)/i,               // "28 лет", "58 жас", "52 года"
-      /^(\d{2})$/m,                                     // просто "28" или "58" в отдельной строке
-      /\b(\d{2})\b/,                                    // число от 15 до 99
+      /(?:мне|возраст)\s*(\d{2})\s*(?:лет|год|жас)/i,  // "мне 28 лет"
+      /(\d{2})\s*(?:лет|год|жас|года)/i,               // "28 лет", "58 жас"
     ];
 
     for (const pattern of patterns) {
       const match = t.match(pattern);
       if (match) {
         const age = parseInt(match[1], 10);
-        // Валидация: 15-99 лет
         if (age >= 15 && age <= 99) {
           return age;
         }
@@ -815,7 +854,7 @@ export class WhatsAppParserService {
     const birthYearMatch = t.match(/\b(19\d{2}|20\d{2})\s*(?:год|г\.р\.|года)?/);
     if (birthYearMatch) {
       const birthYear = parseInt(birthYearMatch[1], 10);
-      const currentYear = 2026; // Текущий год из контекста
+      const currentYear = 2026;
       const age = currentYear - birthYear;
       if (age >= 15 && age <= 99) {
         return age;
@@ -890,15 +929,36 @@ export class WhatsAppParserService {
 
   /**
    * Определяет город и является ли клиент жителем Актобе
+   * FIX (Deploy #32): 
+   * - "В Актобе" = isAktobe TRUE
+   * - "Актобе.адрес" = isAktobe TRUE  
+   * - Улучшена точность определения
    */
   extractCityAndResident(text: string): { city: string | null; isAktobe: boolean } {
     if (!text) return { city: null, isAktobe: false };
 
     const t = text.toLowerCase();
 
+    // Явные указания что живет в Актобе
+    const aktobeConfirmation = [
+      /(?:^|\s)в актобе(?:\s|$|\.)/i,
+      /(?:^|\s)в городе актобе/i,
+      /актобе\.адрес/i,
+      /проживаю.*актоб/i,
+      /живу.*актоб/i,
+      /я житель актобе/i,
+      /я из актобе/i,
+      /(?:^|\s)актобе(?:\s|$)/i, // Просто "Актобе" в ответе
+    ];
+
+    for (const pattern of aktobeConfirmation) {
+      if (pattern.test(t)) {
+        return { city: 'Актобе', isAktobe: true };
+      }
+    }
+
     // Актобе и область
     const aktobePatterns = [
-      { pattern: /\bактобе\b/i, name: 'Актобе' },
       { pattern: /\bақтөбе\b/i, name: 'Актобе' },
       { pattern: /\baktobe\b/i, name: 'Актобе' },
       { pattern: /актюбинск/i, name: 'Актюбинская область' },
@@ -911,11 +971,6 @@ export class WhatsAppParserService {
       if (pattern.test(t)) {
         return { city: name, isAktobe: true };
       }
-    }
-
-    // Проверяем фразы "проживаю в Актобе", "живу в Актобе", "в городе"
-    if (/проживаю.*актоб|живу.*актоб|в\s+городе|в\s+актоб/i.test(t)) {
-      return { city: 'Актобе', isAktobe: true };
     }
 
     // Другие города - НЕ Актобе
@@ -943,13 +998,16 @@ export class WhatsAppParserService {
   /**
    * Извлекает имя клиента из сообщений
    * Ищет после вопросов "Как Вас зовут?", "Ваше имя?", "как я могу к Вам обращаться?"
-   * FIX (Deploy #31): Улучшена валидация и производительность
+   * FIX (Deploy #32): 
+   * - НЕ парсим вопросы как имя!
+   * - Проверяем что ответ НЕ содержит "возраст", "лет", "можно"
+   * - Только короткие ответы (2-15 символов, 1-2 слова)
    */
   extractName(messages: string[]): string | null {
     if (!messages || messages.length === 0) return null;
 
-    // Оптимизация: ищем только последние 10 сообщений
-    const recentMessages = messages.slice(-10);
+    // Оптимизация: ищем только последние 15 сообщений
+    const recentMessages = messages.slice(-15);
 
     // Ищем паттерн: вопрос оператора → ответ клиента
     for (let i = 0; i < recentMessages.length - 1; i++) {
@@ -960,21 +1018,36 @@ export class WhatsAppParserService {
       if (
         /как.*зовут|как.*обращаться|ваше имя|атыңыз|есіміңіз|подскажите.*имя/i.test(msg) &&
         nextMsg &&
-        nextMsg.length > 0 &&
+        nextMsg.length > 1 &&
         nextMsg.length <= MAX_NAME_LENGTH
       ) {
-        // Следующее сообщение должно быть коротким текстом (имя)
         const name = nextMsg.trim();
         
-        // Проверяем что это похоже на имя (буквы, не URL, не номер, не длинный текст)
+        // Фильтры: НЕ имя если содержит:
+        const blocklist = [
+          'возраст', 'лет', 'год', 'можно', 'хочу', 'когда', 'где',
+          'сколько', 'какой', 'какая', 'есть', 'нету', 'нет',
+          'http', 'www', '.com', '.ru', 'https',
+          'записать', 'спасибо', 'благодар', 'здравствуй',
+        ];
+        
+        const nameLower = name.toLowerCase();
+        if (blocklist.some(word => nameLower.includes(word))) {
+          continue; // Это НЕ имя, это вопрос или фраза
+        }
+        
+        // Проверяем что это похоже на имя:
+        // - Только буквы, пробелы, дефисы
+        // - Не слишком длинное (макс 2 слова для имени+фамилии)
         if (
-          /^[а-яёa-zәіңғүұқөһ\s-]+$/i.test(name) && 
-          !/http|www|\.com|\.ru|\d{5}|здравствуй|спасибо|можно|хочу/i.test(name) &&
-          name.split(' ').length <= MAX_NAME_WORDS
+          /^[а-яёa-zәіңғүұқөһ\s-]+$/i.test(name) &&
+          name.split(/\s+/).length <= 2 && // Макс 2 слова
+          name.length >= 2 && // Минимум 2 символа
+          name.length <= 30  // Максимум 30 символов
         ) {
           // Капитализируем первую букву каждого слова
           return name
-            .split(' ')
+            .split(/\s+/)
             .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
             .join(' ');
         }
