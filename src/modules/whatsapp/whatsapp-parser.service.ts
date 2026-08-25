@@ -950,7 +950,7 @@ export class WhatsAppParserService {
 
   /**
    * Извлекает возраст из сообщений клиента
-   * Примеры: "58", "28 лет", "мне 21 год", "19"
+   * Примеры: "58", "28 лет", "мне 21 год", "19", "1954 год", "52 года"
    */
   extractAge(text: string): number | null {
     if (!text) return null;
@@ -960,8 +960,9 @@ export class WhatsAppParserService {
     // Паттерны для возраста
     const patterns = [
       /(?:мне|возраст)\s*(\d{2})\s*(?:лет|год|жас)/i,  // "мне 28 лет", "возраст 58"
-      /(?:^|\s)(\d{2})\s*(?:лет|год|жас)/i,            // "28 лет", "58 жас"
-      /(?:^|\s)(\d{2})(?:\s|$)/,                        // просто "28" или "58"
+      /(\d{2})\s*(?:лет|год|жас|года)/i,               // "28 лет", "58 жас", "52 года"
+      /^(\d{2})$/m,                                     // просто "28" или "58" в отдельной строке
+      /\b(\d{2})\b/,                                    // число от 15 до 99
     ];
 
     for (const pattern of patterns) {
@@ -975,31 +976,78 @@ export class WhatsAppParserService {
       }
     }
 
+    // Проверяем год рождения (например "1954 год")
+    const birthYearMatch = t.match(/\b(19\d{2}|20\d{2})\s*(?:год|г\.р\.|года)?/);
+    if (birthYearMatch) {
+      const birthYear = parseInt(birthYearMatch[1], 10);
+      const currentYear = 2026; // Текущий год из контекста
+      const age = currentYear - birthYear;
+      if (age >= 15 && age <= 99) {
+        return age;
+      }
+    }
+
     return null;
   }
 
   /**
-   * Определяет пол по возрасту и ограничениям
-   * Женщины: от 20 лет
-   * Мужчины: от 30 лет
+   * Определяет пол по возрасту, ключевым словам и цене
+   * Женщины: от 23 лет (акция 3990 ₸)
+   * Мужчины: от 30 лет (акция 7000 ₸)
    */
   extractGender(text: string, age?: number): 'MALE' | 'FEMALE' | null {
     if (!text && !age) return null;
 
     const t = text.toLowerCase();
 
-    // Прямые указания пола
-    if (/женщин|әйел|ayel/i.test(t)) return 'FEMALE';
-    if (/мужчин|еркек|erkek/i.test(t)) return 'MALE';
+    // Прямые указания пола - приоритет 1
+    const maleKeywords = [
+      /\bмужчин\b/i,
+      /\bеркек\b/i,
+      /\berkek\b/i,
+      /\bерлер\b/i,
+      /для мужчин/i,
+      /мужской/i,
+    ];
 
-    // По возрасту
+    const femaleKeywords = [
+      /\bженщин\b/i,
+      /\bәйел\b/i,
+      /\bayel\b/i,
+      /\bқыз\b/i,
+      /\bкыз\b/i,
+      /\bбала\b/i,
+      /для женщин/i,
+      /\bдевушк/i,
+      /женский/i,
+      /әйелдер/i,
+    ];
+
+    for (const pattern of maleKeywords) {
+      if (pattern.test(t)) return 'MALE';
+    }
+
+    for (const pattern of femaleKeywords) {
+      if (pattern.test(t)) return 'FEMALE';
+    }
+
+    // Определение по цене - приоритет 2
+    if (/7\s*000|семь тысяч/i.test(t)) return 'MALE';
+    if (/3\s*990|три тысяч/i.test(t)) return 'FEMALE';
+
+    // Определение по возрасту - приоритет 3
     if (age) {
-      // Если возраст 20-29, скорее всего женщина (т.к. мужчины от 30)
-      if (age >= 20 && age < 30) return 'FEMALE';
-      // Если возраст 30+, может быть и мужчина и женщина
-      // Смотрим на цену в тексте
-      if (/7000|7\s*000|семь тысяч/i.test(t)) return 'MALE';
-      if (/3990|3\s*990|три тысяч/i.test(t)) return 'FEMALE';
+      // Женщины от 23, мужчины от 30
+      // Если возраст 23-29, скорее всего женщина
+      if (age >= 23 && age < 30) return 'FEMALE';
+      // Если 30+, нужно больше контекста
+      // По умолчанию если нет других признаков - женщина (статистически чаще)
+      if (age >= 30 && age <= 69) {
+        // Проверяем нет ли мужских признаков
+        if (maleKeywords.some(k => k.test(t))) return 'MALE';
+        // По умолчанию женщина
+        return 'FEMALE';
+      }
     }
 
     return null;
@@ -1015,33 +1063,37 @@ export class WhatsAppParserService {
 
     // Актобе и область
     const aktobePatterns = [
-      /актобе/i,
-      /ақтөбе/i,
-      /aktobe/i,
-      /актюбинск/i,
-      /хромтау/i,   // город в области
-      /алга/i,       // город в области
-      /кандыагаш/i,  // город в области
+      { pattern: /\bактобе\b/i, name: 'Актобе' },
+      { pattern: /\bақтөбе\b/i, name: 'Актобе' },
+      { pattern: /\baktobe\b/i, name: 'Актобе' },
+      { pattern: /актюбинск/i, name: 'Актюбинская область' },
+      { pattern: /\bхромтау\b/i, name: 'Хромтау' },   // город в области
+      { pattern: /\bалга\b/i, name: 'Алга' },         // город в области
+      { pattern: /кандыагаш/i, name: 'Кандыагаш' },   // город в области
     ];
 
-    for (const pattern of aktobePatterns) {
+    for (const { pattern, name } of aktobePatterns) {
       if (pattern.test(t)) {
-        const cityMatch = t.match(/(актобе|ақтөбе|aktobe|хромтау|алга|кандыагаш)/i);
-        return {
-          city: cityMatch ? cityMatch[1] : 'Актобе',
-          isAktobe: true,
-        };
+        return { city: name, isAktobe: true };
       }
     }
 
-    // Другие города
+    // Проверяем фразы "проживаю в Актобе", "живу в Актобе", "в городе"
+    if (/проживаю.*актоб|живу.*актоб|в\s+городе|в\s+актоб/i.test(t)) {
+      return { city: 'Актобе', isAktobe: true };
+    }
+
+    // Другие города - НЕ Актобе
     const otherCities = [
-      { pattern: /уральск/i, name: 'Уральск' },
-      { pattern: /алматы/i, name: 'Алматы' },
-      { pattern: /астана/i, name: 'Астана' },
-      { pattern: /шымкент/i, name: 'Шымкент' },
+      { pattern: /\bуральск\b/i, name: 'Уральск' },
+      { pattern: /\bалматы\b/i, name: 'Алматы' },
+      { pattern: /\bастана\b/i, name: 'Астана' },
+      { pattern: /\bшымкент\b/i, name: 'Шымкент' },
       { pattern: /караганд/i, name: 'Караганда' },
-      { pattern: /атырау/i, name: 'Атырау' },
+      { pattern: /\bатырау\b/i, name: 'Атырау' },
+      { pattern: /\bтараз\b/i, name: 'Тараз' },
+      { pattern: /\bкостанай\b/i, name: 'Костанай' },
+      { pattern: /\bпавлодар\b/i, name: 'Павлодар' },
     ];
 
     for (const { pattern, name } of otherCities) {
@@ -1055,7 +1107,7 @@ export class WhatsAppParserService {
 
   /**
    * Извлекает имя клиента из сообщений
-   * Ищет после вопросов "Как Вас зовут?", "Ваше имя?"
+   * Ищет после вопросов "Как Вас зовут?", "Ваше имя?", "как я могу к Вам обращаться?"
    */
   extractName(messages: string[]): string | null {
     if (!messages || messages.length === 0) return null;
@@ -1067,16 +1119,25 @@ export class WhatsAppParserService {
 
       // Вопросы оператора о имени
       if (
-        /как.*зовут|как.*обращаться|ваше имя|атыңыз|есіміңіз/i.test(msg) &&
+        /как.*зовут|как.*обращаться|ваше имя|атыңыз|есіміңіз|подскажите.*имя/i.test(msg) &&
         nextMsg &&
         nextMsg.length > 0 &&
         nextMsg.length < 50  // Имя не должно быть слишком длинным
       ) {
         // Следующее сообщение должно быть коротким текстом (имя)
         const name = nextMsg.trim();
-        // Проверяем что это похоже на имя (буквы, не URL, не номер)
-        if (/^[а-яёa-zәіңғүұқөһ\s-]+$/i.test(name) && !/http|www|\d{5}/i.test(name)) {
-          return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+        
+        // Проверяем что это похоже на имя (буквы, не URL, не номер, не длинный текст)
+        if (
+          /^[а-яёa-zәіңғүұқөһ\s-]+$/i.test(name) && 
+          !/http|www|\.com|\.ru|\d{5}|здравствуй|спасибо|можно|хочу/i.test(name) &&
+          name.split(' ').length <= 3  // Максимум 3 слова (Имя Фамилия Отчество)
+        ) {
+          // Капитализируем первую букву каждого слова
+          return name
+            .split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+            .join(' ');
         }
       }
     }
