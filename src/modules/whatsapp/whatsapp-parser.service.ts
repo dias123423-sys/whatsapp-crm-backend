@@ -146,6 +146,12 @@ export class WhatsAppParserService {
       const ctxDate = this.extractDate(fullConversation);
       const ctxTime = this.extractTime(fullConversation);
 
+      // STEP 7.5: NEW PARSERS — age, gender, city, name
+      const ctxAge = this.extractAge(fullConversation);
+      const ctxGender = this.extractGender(fullConversation, ctxAge ?? undefined);
+      const { city: ctxCity, isAktobe: ctxIsAktobe } = this.extractCityAndResident(fullConversation);
+      const ctxName = this.extractName(allMessages.map(m => m.message));
+
       // STEP 8: RESULT PARSER — BOOKED / LOST / UNKNOWN
       const ctxResult = this.determineResult(fullConversation);
 
@@ -188,6 +194,45 @@ export class WhatsAppParserService {
       if (ctxTime && !(recentLead as any).parsedTime) {
         updateData.parsedTime = ctxTime;
         this.logger.log(`🕐 Time: ${ctxTime}`);
+      }
+
+      // Age: обновляем только если ещё нет
+      if (ctxAge && !(recentLead as any).parsedAge) {
+        updateData.parsedAge = ctxAge;
+        this.logger.log(`👤 Age: ${ctxAge}`);
+      }
+
+      // Gender: обновляем только если ещё нет
+      if (ctxGender && !(recentLead as any).parsedGender) {
+        updateData.parsedGender = ctxGender;
+        this.logger.log(`👤 Gender: ${ctxGender}`);
+      }
+
+      // City: обновляем только если ещё нет
+      if (ctxCity && !(recentLead as any).parsedCity) {
+        updateData.parsedCity = ctxCity;
+        this.logger.log(`🏙️ City: ${ctxCity}`);
+      }
+
+      // Aktobe resident: обновляем только если ещё нет
+      if (ctxIsAktobe !== undefined && (recentLead as any).isAktobeResident === null) {
+        updateData.isAktobeResident = ctxIsAktobe;
+        this.logger.log(`📍 Aktobe resident: ${ctxIsAktobe ? 'YES' : 'NO'}`);
+      }
+
+      // Name: обновляем только если ещё нет
+      if (ctxName && !(recentLead as any).parsedName) {
+        updateData.parsedName = ctxName;
+        this.logger.log(`👤 Name: ${ctxName}`);
+        
+        // Обновляем имя клиента в Client, если его там нет
+        if (!client.name) {
+          await this.prisma.client.update({
+            where: { id: client.id },
+            data: { name: ctxName },
+          });
+          this.logger.log(`✅ Client name updated: ${ctxName}`);
+        }
       }
 
       // Result: BOOKED не деградирует до UNKNOWN
@@ -242,6 +287,12 @@ export class WhatsAppParserService {
     const result       = this.determineResult(fullContext);
     const period       = this.determinePeriod();
 
+    // Новые парсеры
+    const parsedAge    = this.extractAge(fullContext);
+    const parsedGender = this.extractGender(fullContext, parsedAge ?? undefined);
+    const { city: parsedCity, isAktobe: isAktobeResident } = this.extractCityAndResident(fullContext);
+    const parsedName   = this.extractName(prevMessages.map(m => m.message));
+
     // ─────────────────────────────────────────────────
     // DUPLICATE PREVENTION: Try to create, catch unique constraint violation
     // If another webhook created lead concurrently → retry as update
@@ -258,6 +309,11 @@ export class WhatsAppParserService {
           parsedCurrency:    'KZT',
           parsedDate:        parsedDate ?? undefined,
           parsedTime:        parsedTime ?? undefined,
+          parsedAge:         parsedAge ?? undefined,
+          parsedGender:      parsedGender ?? undefined,
+          parsedCity:        parsedCity ?? undefined,
+          isAktobeResident:  isAktobeResident ?? undefined,
+          parsedName:        parsedName ?? undefined,
           offerId:           offerMatch?.offerId ?? undefined,
           status:            'NEW',
           source:            'WHATSAPP',
@@ -315,6 +371,12 @@ export class WhatsAppParserService {
           const ctxTime = this.extractTime(fullConversation);
           const ctxResult = this.determineResult(fullConversation);
 
+          // Новые парсеры
+          const ctxAge = this.extractAge(fullConversation);
+          const ctxGender = this.extractGender(fullConversation, ctxAge ?? undefined);
+          const { city: ctxCity, isAktobe: ctxIsAktobe } = this.extractCityAndResident(fullConversation);
+          const ctxName = this.extractName(allMessages.map(m => m.message));
+
           const updateData: any = {
             originalMessage: existingLead.originalMessage
               ? `${existingLead.originalMessage}\n---\n${messageText}`
@@ -349,6 +411,31 @@ export class WhatsAppParserService {
           // Update time if not set
           if (ctxTime && !(existingLead as any).parsedTime) {
             updateData.parsedTime = ctxTime;
+          }
+
+          // Update age if not set
+          if (ctxAge && !(existingLead as any).parsedAge) {
+            updateData.parsedAge = ctxAge;
+          }
+
+          // Update gender if not set
+          if (ctxGender && !(existingLead as any).parsedGender) {
+            updateData.parsedGender = ctxGender;
+          }
+
+          // Update city if not set
+          if (ctxCity && !(existingLead as any).parsedCity) {
+            updateData.parsedCity = ctxCity;
+          }
+
+          // Update Aktobe resident flag if not set
+          if (ctxIsAktobe !== undefined && (existingLead as any).isAktobeResident === null) {
+            updateData.isAktobeResident = ctxIsAktobe;
+          }
+
+          // Update name if not set
+          if (ctxName && !(existingLead as any).parsedName) {
+            updateData.parsedName = ctxName;
           }
 
           // Update result (don't degrade BOOKED to UNKNOWN)
@@ -854,6 +941,146 @@ export class WhatsAppParserService {
     // ═══════════════════════════════════════════════════════════════════
 
     this.logger.log(`⚪ NULL | no explicit booking confirmation`);
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // НОВЫЕ ПАРСЕРЫ: ВОЗРАСТ, ПОЛ, ГОРОД, ИМЯ
+  // ═══════════════════════════════════════════════════════════════════
+
+  /**
+   * Извлекает возраст из сообщений клиента
+   * Примеры: "58", "28 лет", "мне 21 год", "19"
+   */
+  extractAge(text: string): number | null {
+    if (!text) return null;
+
+    const t = text.toLowerCase();
+
+    // Паттерны для возраста
+    const patterns = [
+      /(?:мне|возраст)\s*(\d{2})\s*(?:лет|год|жас)/i,  // "мне 28 лет", "возраст 58"
+      /(?:^|\s)(\d{2})\s*(?:лет|год|жас)/i,            // "28 лет", "58 жас"
+      /(?:^|\s)(\d{2})(?:\s|$)/,                        // просто "28" или "58"
+    ];
+
+    for (const pattern of patterns) {
+      const match = t.match(pattern);
+      if (match) {
+        const age = parseInt(match[1], 10);
+        // Валидация: 15-99 лет
+        if (age >= 15 && age <= 99) {
+          return age;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Определяет пол по возрасту и ограничениям
+   * Женщины: от 20 лет
+   * Мужчины: от 30 лет
+   */
+  extractGender(text: string, age?: number): 'MALE' | 'FEMALE' | null {
+    if (!text && !age) return null;
+
+    const t = text.toLowerCase();
+
+    // Прямые указания пола
+    if (/женщин|әйел|ayel/i.test(t)) return 'FEMALE';
+    if (/мужчин|еркек|erkek/i.test(t)) return 'MALE';
+
+    // По возрасту
+    if (age) {
+      // Если возраст 20-29, скорее всего женщина (т.к. мужчины от 30)
+      if (age >= 20 && age < 30) return 'FEMALE';
+      // Если возраст 30+, может быть и мужчина и женщина
+      // Смотрим на цену в тексте
+      if (/7000|7\s*000|семь тысяч/i.test(t)) return 'MALE';
+      if (/3990|3\s*990|три тысяч/i.test(t)) return 'FEMALE';
+    }
+
+    return null;
+  }
+
+  /**
+   * Определяет город и является ли клиент жителем Актобе
+   */
+  extractCityAndResident(text: string): { city: string | null; isAktobe: boolean } {
+    if (!text) return { city: null, isAktobe: false };
+
+    const t = text.toLowerCase();
+
+    // Актобе и область
+    const aktobePatterns = [
+      /актобе/i,
+      /ақтөбе/i,
+      /aktobe/i,
+      /актюбинск/i,
+      /хромтау/i,   // город в области
+      /алга/i,       // город в области
+      /кандыагаш/i,  // город в области
+    ];
+
+    for (const pattern of aktobePatterns) {
+      if (pattern.test(t)) {
+        const cityMatch = t.match(/(актобе|ақтөбе|aktobe|хромтау|алга|кандыагаш)/i);
+        return {
+          city: cityMatch ? cityMatch[1] : 'Актобе',
+          isAktobe: true,
+        };
+      }
+    }
+
+    // Другие города
+    const otherCities = [
+      { pattern: /уральск/i, name: 'Уральск' },
+      { pattern: /алматы/i, name: 'Алматы' },
+      { pattern: /астана/i, name: 'Астана' },
+      { pattern: /шымкент/i, name: 'Шымкент' },
+      { pattern: /караганд/i, name: 'Караганда' },
+      { pattern: /атырау/i, name: 'Атырау' },
+    ];
+
+    for (const { pattern, name } of otherCities) {
+      if (pattern.test(t)) {
+        return { city: name, isAktobe: false };
+      }
+    }
+
+    return { city: null, isAktobe: false };
+  }
+
+  /**
+   * Извлекает имя клиента из сообщений
+   * Ищет после вопросов "Как Вас зовут?", "Ваше имя?"
+   */
+  extractName(messages: string[]): string | null {
+    if (!messages || messages.length === 0) return null;
+
+    // Ищем паттерн: вопрос оператора → ответ клиента
+    for (let i = 0; i < messages.length - 1; i++) {
+      const msg = messages[i].toLowerCase();
+      const nextMsg = messages[i + 1];
+
+      // Вопросы оператора о имени
+      if (
+        /как.*зовут|как.*обращаться|ваше имя|атыңыз|есіміңіз/i.test(msg) &&
+        nextMsg &&
+        nextMsg.length > 0 &&
+        nextMsg.length < 50  // Имя не должно быть слишком длинным
+      ) {
+        // Следующее сообщение должно быть коротким текстом (имя)
+        const name = nextMsg.trim();
+        // Проверяем что это похоже на имя (буквы, не URL, не номер)
+        if (/^[а-яёa-zәіңғүұқөһ\s-]+$/i.test(name) && !/http|www|\d{5}/i.test(name)) {
+          return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+        }
+      }
+    }
+
     return null;
   }
 

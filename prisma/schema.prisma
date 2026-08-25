@@ -116,6 +116,11 @@ model Lead {
   externalConversationId String? // ID диалога из внешней системы
   parsedDate        String?   // Дата из диалога: "2026-08-15"
   parsedTime        String?   // Время из диалога: "16:00"
+  parsedAge         Int?      // Возраст клиента из диалога
+  parsedGender      String?   // Пол: "MALE" или "FEMALE"
+  parsedCity        String?   // Город: "Актобе", "Уральск" и т.д.
+  isAktobeResident  Boolean?  // Жителель Актобе/области (для акций)
+  parsedName        String?   // Имя из диалога
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
   assignedAt        DateTime? // Когда назначен оператору

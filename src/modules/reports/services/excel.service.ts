@@ -125,8 +125,8 @@ export class ExcelService {
     ws.properties.defaultRowHeight = 18;
 
     // ── Header block ──
-    const TOTAL_COLS = 19; // A–S
-    const colRange   = `A1:S1`;
+    const TOTAL_COLS = 24; // A–X (добавлено 5 колонок)
+    const colRange   = `A1:X1`;
 
     ws.mergeCells(colRange);
     const titleCell = ws.getCell('A1');
@@ -136,7 +136,7 @@ export class ExcelService {
     titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1D6F42' } };
     ws.getRow(1).height = 30;
 
-    ws.mergeCells('A2:S2');
+    ws.mergeCells('A2:X2');
     ws.getCell('A2').value = `Дата формирования: ${new Date().toLocaleString('ru-RU', {
       timeZone: process.env.APP_TIMEZONE || 'Asia/Almaty',
     })}`;
@@ -148,14 +148,14 @@ export class ExcelService {
     const botUnknown = leads.filter((l) => l.botResult === 'UNKNOWN').length;
     const botLost = leads.filter((l) => l.botResult === 'LOST').length;
 
-    ws.mergeCells('A3:S3');
+    ws.mergeCells('A3:X3');
     ws.getCell('A3').value = `BOOKED: ${botBooked}  |  UNKNOWN: ${botUnknown}  |  LOST: ${botLost}`;
     ws.getCell('A3').font = { bold: true, size: 11 };
     ws.getCell('A3').alignment = { horizontal: 'center' };
     ws.getRow(3).height = 20;
 
     if (period) {
-      ws.mergeCells('A4:S4');
+      ws.mergeCells('A4:X4');
       ws.getCell('A4').value = `Период: ${period}`;
       ws.getCell('A4').alignment = { horizontal: 'center' };
       ws.getRow(4).height = 16;
@@ -163,18 +163,23 @@ export class ExcelService {
 
     const dataStartRow = period ? 6 : 5;
 
-    // ── Column definitions (19 колонок A–S) ──
+    // ── Column definitions (24 колонки A–X) ──
     ws.columns = [
       { key: 'no',           header: '№',                     width: 6  },
       { key: 'createdDate',  header: 'Дата лида',             width: 12 },
       { key: 'createdTime',  header: 'Время лида',            width: 8  },
       { key: 'phone',        header: 'Телефон',               width: 18 },
       { key: 'name',         header: 'Имя',                   width: 22 },
+      { key: 'age',          header: 'Возраст',               width: 10 },
+      { key: 'gender',       header: 'Пол',                   width: 10 },
+      { key: 'city',         header: 'Город',                 width: 16 },
+      { key: 'aktobe',       header: 'Актобе',                width: 10 },
       { key: 'procedure',    header: 'Процедура',             width: 30 },
       { key: 'price',        header: 'Цена',                  width: 14 },
       { key: 'currency',     header: 'Валюта',                width: 8  },
       { key: 'parsedDate',   header: 'Дата записи',           width: 14 },
       { key: 'parsedTime',   header: 'Время записи',          width: 12 },
+      { key: 'period',       header: 'Период',                width: 10 },
       { key: 'whatsapp',     header: 'WhatsApp',              width: 14 },
       { key: 'owner',        header: 'Владелец WA',           width: 14 },
       { key: 'operator',     header: 'Оператор',              width: 18 },
@@ -189,8 +194,8 @@ export class ExcelService {
     // ── Header row style ──
     const headerRow = ws.getRow(dataStartRow);
     const headers = [
-      '№', 'Дата лида', 'Время лида', 'Телефон', 'Имя', 'Процедура',
-      'Цена', 'Валюта', 'Дата записи', 'Время записи',
+      '№', 'Дата лида', 'Время лида', 'Телефон', 'Имя', 'Возраст', 'Пол', 'Город', 'Актобе',
+      'Процедура', 'Цена', 'Валюта', 'Дата записи', 'Время записи', 'Период',
       'WhatsApp', 'Владелец WA', 'Оператор',
       'Статус', 'Результат', 'Источник', 'Campaign', 'Ad ID', 'Оригинальное сообщение',
     ];
@@ -213,7 +218,7 @@ export class ExcelService {
     // Auto filter
     ws.autoFilter = {
       from: { row: dataStartRow, column: 1 },
-      to:   { row: dataStartRow, column: 19 },
+      to:   { row: dataStartRow, column: 24 },
     };
 
     // ── Data rows ──
@@ -241,17 +246,32 @@ export class ExcelService {
       const parsedDateStr = (lead as any).parsedDate ?? '—';
       const parsedTimeStr = (lead as any).parsedTime ?? '—';
 
+      // Новые поля
+      const parsedAge = (lead as any).parsedAge ?? '—';
+      const parsedGender = (lead as any).parsedGender === 'MALE' ? 'Мужчина' : 
+                          (lead as any).parsedGender === 'FEMALE' ? 'Женщина' : '—';
+      const parsedCity = (lead as any).parsedCity ?? '—';
+      const isAktobe = (lead as any).isAktobeResident === true ? 'ДА' : 
+                      (lead as any).isAktobeResident === false ? 'НЕТ' : '—';
+      const periodLabel = lead.period === 'DAY' ? 'День' : lead.period === 'NIGHT' ? 'Ночь' : '—';
+      const clientName = (lead as any).parsedName || lead.client?.name || lead.client?.whatsappName || '—';
+
       const row = ws.addRow([
         index + 1,
         createdAt.toLocaleDateString('ru-RU', { timeZone: tz }),
         createdAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: tz }),
         lead.client?.phone || lead.client?.normalizedPhone || '—',
-        lead.client?.whatsappName || lead.client?.name || '—',
+        clientName,
+        parsedAge,
+        parsedGender,
+        parsedCity,
+        isAktobe,
         procedures,
         priceNum !== null ? priceNum : '',
         'KZT',
         parsedDateStr,
         parsedTimeStr,
+        periodLabel,
         lead.whatsappAccount?.name || '—',
         lead.whatsappOwner?.name || '—',
         lead.operator?.user?.name || '—',
@@ -270,8 +290,8 @@ export class ExcelService {
         row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F5F5' } };
       }
 
-      // Цвет статуса (колонка 14)
-      const statusCell = row.getCell(14);
+      // Цвет статуса (колонка 19, было 14)
+      const statusCell = row.getCell(19);
       switch (lead.status) {
         case 'NEW':
           statusCell.font = { color: { argb: 'FF0070C0' }, bold: true };
@@ -288,8 +308,8 @@ export class ExcelService {
           break;
       }
 
-      // Цвет bot result (колонка 15 = "Результат")
-      const resultCell = row.getCell(15);
+      // Цвет bot result (колонка 20, было 15 = "Результат")
+      const resultCell = row.getCell(20);
       switch (lead.botResult) {
         case 'BOOKED':
           resultCell.font = { color: { argb: 'FF00B050' }, bold: true };
