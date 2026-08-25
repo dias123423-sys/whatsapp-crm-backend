@@ -553,6 +553,12 @@ export class WhatsAppWebhookController {
     let digits = raw.replace(/\D/g, '');
     if (!digits) return '';
 
+    // ФИЛЬТР: @lid номера (начинаются с "100" и очень длинные >13 цифр)
+    if (digits.startsWith('100') && digits.length > 13) {
+      this.logger.warn(`⚠️ Invalid @lid phone number detected: ${digits} - skipping`);
+      return '';
+    }
+
     // Kazakhstan: 8xxxxxxxxxx → 7xxxxxxxxxx
     if (digits.length === 11 && digits.startsWith('8')) {
       digits = '7' + digits.slice(1);
@@ -561,6 +567,13 @@ export class WhatsAppWebhookController {
     // Kazakhstan local without country code: 7xxxxxxxxx (10 digits)
     if (digits.length === 10 && !digits.startsWith('7')) {
       digits = '7' + digits;
+    }
+
+    // ВАЛИДАЦИЯ: правильная длина номера
+    // +7XXXXXXXXXX (11 цифр) или +998XXXXXXXXX (12 цифр)
+    if (digits.length < 11 || digits.length > 15) {
+      this.logger.warn(`⚠️ Invalid phone length: ${digits.length} digits (${digits})`);
+      return '';
     }
 
     return '+' + digits;
