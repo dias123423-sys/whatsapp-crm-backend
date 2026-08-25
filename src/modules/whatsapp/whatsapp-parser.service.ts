@@ -132,21 +132,33 @@ export class WhatsAppParserService {
     });
 
     // ─────────────────────────────────────────────────
-    // STEP 4: Find ANY active lead (not only 24h) → UPDATE or CREATE
-    // FIX: Убрана проверка createdAt для предотвращения дубликатов
+    // STEP 4: Find ACTIVE lead within dialog window (24h)
+    // КРИТИЧЕСКОЕ ПРАВИЛО:
+    // - Один номер = один Client
+    // - Один Client может иметь МНОГО Lead
+    // - Сообщения одного диалога обновляют ОДИН Lead
+    // - Если прошло >24ч или Lead завершён → создать НОВЫЙ Lead
     // ─────────────────────────────────────────────────
+    const ACTIVE_DIALOG_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 часа
+    const activeDialogThreshold = new Date(Date.now() - ACTIVE_DIALOG_WINDOW_MS);
+
     const recentLead = await this.prisma.lead.findFirst({
       where: {
         clientId: client.id,
-        status: { in: ['NEW', 'ASSIGNED', 'CALLING', 'FOLLOW_UP', 'BOOKED'] },
-        // FIX: включён BOOKED чтобы не создавались дубли после подтверждения записи
-        // Ограничиваем 7 днями чтобы не обновлять очень старые лиды
-        createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+        // Только активные статусы (НЕ включая BOOKED и CLOSED)
+        status: { in: ['NEW', 'ASSIGNED', 'CALLING', 'FOLLOW_UP'] },
+        // Только в окне активного диалога (24 часа)
+        createdAt: { gte: activeDialogThreshold },
       },
       orderBy: { createdAt: 'desc' },
     });
 
     if (recentLead) {
+      // ╔════════════════════════════════════════════════════════════╗
+      // ║ ОБНОВЛЕНИЕ СУЩЕСТВУЮЩЕГО LEAD                              ║
+      // ║ Условие: есть активный Lead в окне 24ч                     ║
+      // ║ Действие: обновить данные текущего Lead                    ║
+      // ╚════════════════════════════════════════════════════════════╝
       this.logger.log(`Updating lead ${recentLead.id} status=${recentLead.status}`);
 
       // STEP 5: Load full conversation context (ALL messages since lead creation)
@@ -181,7 +193,31 @@ export class WhatsAppParserService {
     }
 
     // ─────────────────────────────────────────────────
-    // STEP 9: Create new Lead
+    // STEP 9: Create NEW Lead
+    // ╔════════════════════════════════════════════════════════════╗
+    // ║ СОЗДАНИЕ НОВОГО LEAD                                       ║
+    // ║                                                            ║
+    // ║ КРИТИЧЕСКОЕ ПРАВИЛО БАЗЫ:                                 ║
+    // ║ • Client и Lead — РАЗНЫЕ сущности                         ║
+    // ║ • normalizedPhone определяет Client (один номер = один Client) ║
+    // ║ • Один Client может иметь МНОГО Lead                      ║
+    // ║ • Каждое новое обращение = новый Lead                     ║
+    // ║                                                            ║
+    // ║ УСЛОВИЕ создания нового Lead:                             ║
+    // ║ • НЕТ активного Lead в окне 24ч                           ║
+    // ║ • ИЛИ предыдущий Lead завершён (BOOKED/CLOSED)            ║
+    // ║                                                            ║
+    // ║ Пример:                                                    ║
+    // ║ +77771234567 (Client #1):                                 ║
+    // ║   25.08 10:00 → Lead #1 (NEW)                             ║
+    // ║   25.08 11:00 → Lead #1 (обновление - тот же диалог)     ║
+    // ║   25.08 12:00 → Lead #1 (BOOKED - завершён)              ║
+    // ║   28.08 14:00 → Lead #2 (NEW - новое обращение)          ║
+    // ║                                                            ║
+    // ║ Client остаётся ОДИН для всех Lead                        ║
+    // ║ Нельзя смешивать историю разных обращений в один Lead    ║
+    // ║ OLD PARSER работает по контексту ТЕКУЩЕГО Lead            ║
+    // ╚════════════════════════════════════════════════════════════╝
     // Парсим по fullConversation (все сообщения за 24ч)
     // ВАЖНО: текущее сообщение УЖЕ в базе (upsert выше), не дублируем!
     // ─────────────────────────────────────────────────
