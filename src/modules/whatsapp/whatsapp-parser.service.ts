@@ -132,34 +132,37 @@ export class WhatsAppParserService {
     });
 
     // ─────────────────────────────────────────────────
-    // STEP 4: Find ACTIVE lead within dialog window (24h)
-    // КРИТИЧЕСКОЕ ПРАВИЛО:
-    // - Один номер = один Client
-    // - Один Client может иметь МНОГО Lead
-    // - Сообщения одного диалога обновляют ОДИН Lead
-    // - Если прошло >24ч или Lead завершён → создать НОВЫЙ Lead
-    // ─────────────────────────────────────────────────
+    // STEP 4: Find ACTIVE lead within dialog window (24h from LAST MESSAGE)
+    // ╔════════════════════════════════════════════════════════════╗
+    // ║ КРИТИЧЕСКОЕ ПРАВИЛО:                                       ║
+    // ║ • Client = один номер навсегда                            ║
+    // ║ • Lead = один диалог                                       ║
+    // ║ • Диалог активен 24 часа с момента ПОСЛЕДНЕГО INCOMING    ║
+    // ║ • Любые сообщения внутри 24ч обновляют ТОТ ЖЕ Lead       ║
+    // ║ • Независимо от BOOKED/UNKNOWN/LOST статуса              ║
+    // ║ • Если клиент пишет после 24ч → создать новый Lead       ║
+    // ╚════════════════════════════════════════════════════════════╝
     const ACTIVE_DIALOG_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 часа
     const activeDialogThreshold = new Date(Date.now() - ACTIVE_DIALOG_WINDOW_MS);
 
     const recentLead = await this.prisma.lead.findFirst({
       where: {
         clientId: client.id,
-        // Только активные статусы (НЕ включая BOOKED и CLOSED)
-        status: { in: ['NEW', 'ASSIGNED', 'CALLING', 'FOLLOW_UP'] },
-        // Только в окне активного диалога (24 часа)
-        createdAt: { gte: activeDialogThreshold },
+        // ЛЮБОЙ статус (включая BOOKED, CLOSED) - диалог определяется временем
+        // Окно активного диалога (24 часа с ПОСЛЕДНЕГО обновления)
+        updatedAt: { gte: activeDialogThreshold },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { updatedAt: 'desc' },
     });
 
     if (recentLead) {
       // ╔════════════════════════════════════════════════════════════╗
       // ║ ОБНОВЛЕНИЕ СУЩЕСТВУЮЩЕГО LEAD                              ║
-      // ║ Условие: есть активный Lead в окне 24ч                     ║
-      // ║ Действие: обновить данные текущего Lead                    ║
+      // ║ Условие: Lead обновлялся в последние 24ч                   ║
+      // ║ Действие: обновить данные ТОГО ЖЕ Lead                     ║
+      // ║ Важно: Обновляем даже если статус BOOKED/CLOSED           ║
       // ╚════════════════════════════════════════════════════════════╝
-      this.logger.log(`Updating lead ${recentLead.id} status=${recentLead.status}`);
+      this.logger.log(`Updating lead ${recentLead.id} status=${recentLead.status} (active dialog)`);
 
       // STEP 5: Load full conversation context (ALL messages since lead creation)
       const allMessages = await this.prisma.message.findMany({
