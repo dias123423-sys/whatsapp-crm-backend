@@ -70,7 +70,7 @@ export class LeadsController {
 
     return this.leadsService.findAll(
       page ? parseInt(page) : 1,
-      limit ? parseInt(limit) : 20,
+      limit ? parseInt(limit) : 100, // Увеличен с 20 до 100
       status,
       effectiveOperatorId,
       period,
