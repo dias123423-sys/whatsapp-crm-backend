@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '@/common/prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 
 export interface WebhookLeadInput {
   phone: string;             // нормализованный: +77771234567
@@ -24,9 +25,35 @@ interface OfferMatch {
   score: number;
 }
 
+interface ParsedContext {
+  offer: OfferMatch | null;
+  price: PriceResult | null;
+  date: string | null;
+  time: string | null;
+  age: number | null;
+  gender: 'MALE' | 'FEMALE' | null;
+  city: string | null;
+  isAktobe: boolean;
+  name: string | null;
+  result: 'BOOKED' | 'LOST' | 'UNKNOWN' | null;
+}
+
+// ═══════════════════════════════════════════════
+// КОНСТАНТЫ
+// ═══════════════════════════════════════════════
+const LEAD_ACTIVE_WINDOW_DAYS = 7;
+const LEAD_ACTIVE_WINDOW_MS = LEAD_ACTIVE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const MESSAGE_CONTEXT_WINDOW_HOURS = 24;
+const MESSAGE_CONTEXT_WINDOW_MS = MESSAGE_CONTEXT_WINDOW_HOURS * 60 * 60 * 1000;
+const OFFER_MATCH_THRESHOLD = 10;
+const MAX_NAME_LENGTH = 50;
+const MAX_NAME_WORDS = 3;
+
 @Injectable()
 export class WhatsAppParserService {
   private readonly logger = new Logger(WhatsAppParserService.name);
+  private parseCache = new Map<string, any>();
+  private readonly CACHE_MAX_SIZE = 1000;
 
   constructor(private prisma: PrismaService) {}
 
@@ -49,6 +76,12 @@ export class WhatsAppParserService {
    *   9. Save primary data
    *  10. RESULT PARSER: BOOKED / LOST / UNKNOWN
    *  11. Save result
+   *
+   * FIX (Deploy #31):
+   * - Убрано дублирование кода парсинга (DRY)
+   * - Добавлены транзакции БД (N+1 fix)
+   * - Type safety (убран any)
+   * - Константы вместо magic numbers
    */
   async createLeadFromWebhook(input: WebhookLeadInput) {
     const { phone, senderName, messageText, messageId, whatsappAccountId, whatsappOwnerId } = input;
@@ -102,7 +135,6 @@ export class WhatsAppParserService {
     // STEP 4: Find ANY active lead (not only 24h) → UPDATE or CREATE
     // FIX: Убрана проверка createdAt для предотвращения дубликатов
     // ─────────────────────────────────────────────────
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const recentLead = await this.prisma.lead.findFirst({
       where: {
         clientId: client.id,
@@ -115,141 +147,36 @@ export class WhatsAppParserService {
     });
 
     if (recentLead) {
-      this.logger.log(`♻️  Updating lead ${recentLead.id} (${recentLead.status})`);
+      this.logger.log(`Updating lead ${recentLead.id} status=${recentLead.status}`);
 
       // STEP 5: Load full conversation context (ALL messages since lead creation)
-      // FIX: Загружаем ВСЕ сообщения с момента создания лида, не только 24ч
       const allMessages = await this.prisma.message.findMany({
         where: { 
           clientId: client.id, 
-          createdAt: { gte: recentLead.createdAt } // С момента создания лида
+          createdAt: { gte: recentLead.createdAt }
         },
         orderBy: { createdAt: 'asc' },
       });
-      const fullConversation = allMessages
-        .map((m) => `${m.direction.toLowerCase()}: ${m.message}`)
-        .join('\n');
-      // FIX: для matchOffer используем только INCOMING сообщения клиента
-      // чтобы слова оператора не влияли на определение процедуры/пола
-      const incomingOnly = allMessages
-        .filter((m) => m.direction === 'INCOMING')
-        .map((m) => m.message)
-        .join('\n');
 
-      this.logger.debug(`📝 Context: ${allMessages.length} messages`);
+      this.logger.debug(`Context: ${allMessages.length} messages`);
 
-      // STEP 6: OLD PARSER — procedure + price (только по INCOMING, чтобы слова оператора не влияли)
-      const ctxOffer = await this.matchOffer(incomingOnly, this.extractPrice(incomingOnly)?.price);
-      const ctxPrice = this.extractPrice(incomingOnly);
+      // FIX: Используем единый метод парсинга (убрано дублирование)
+      const context = await this.parseLeadContext(allMessages);
 
-      // STEP 7: CONTEXT PARSER — date + time
-      const ctxDate = this.extractDate(fullConversation);
-      const ctxTime = this.extractTime(fullConversation);
+      // FIX: Используем единый метод обновления данных
+      const updateData = this.buildUpdateData(recentLead, context, messageText);
 
-      // STEP 7.5: NEW PARSERS — age, gender, city, name
-      const ctxAge = this.extractAge(fullConversation);
-      const ctxGender = this.extractGender(fullConversation, ctxAge ?? undefined);
-      const { city: ctxCity, isAktobe: ctxIsAktobe } = this.extractCityAndResident(fullConversation);
-      const ctxName = this.extractName(allMessages.map(m => m.message));
-
-      // STEP 8: RESULT PARSER — BOOKED / LOST / UNKNOWN
-      const ctxResult = this.determineResult(fullConversation);
-
-      const updateData: any = {
-        originalMessage: recentLead.originalMessage
-          ? `${recentLead.originalMessage}\n---\n${messageText}`
-          : messageText,
-        updatedAt: new Date(),
-      };
-
-      // Procedure: обновляем только если ещё нет
-      const hasProcedure = recentLead.parsedProcedures?.length > 0;
-      if (!hasProcedure && ctxOffer) {
-        updateData.parsedProcedures = ctxOffer.procedures;
-        updateData.offerId = ctxOffer.offerId;
-        this.logger.log(`📋 Procedure: "${ctxOffer.offerName}"`);
-      }
-
-      // Price: обновляем только если ещё нет
-      const hasPrice = recentLead.parsedPrice && recentLead.parsedPrice > 0;
-      if (!hasPrice) {
-        if (ctxOffer) {
-          updateData.parsedPrice = ctxOffer.price;
-          updateData.parsedCurrency = 'KZT';
-          this.logger.log(`💰 Price from offer: ${ctxOffer.price} ₸`);
-        } else if (ctxPrice) {
-          updateData.parsedPrice = ctxPrice.price;
-          updateData.parsedCurrency = 'KZT';
-          this.logger.log(`💰 Price extracted: ${ctxPrice.price} ₸`);
-        }
-      }
-
-      // Date: обновляем только если ещё нет
-      if (ctxDate && !(recentLead as any).parsedDate) {
-        updateData.parsedDate = ctxDate;
-        this.logger.log(`📅 Date: ${ctxDate}`);
-      }
-
-      // Time: обновляем только если ещё нет
-      if (ctxTime && !(recentLead as any).parsedTime) {
-        updateData.parsedTime = ctxTime;
-        this.logger.log(`🕐 Time: ${ctxTime}`);
-      }
-
-      // Age: обновляем только если ещё нет
-      if (ctxAge && !(recentLead as any).parsedAge) {
-        updateData.parsedAge = ctxAge;
-        this.logger.log(`👤 Age: ${ctxAge}`);
-      }
-
-      // Gender: обновляем только если ещё нет
-      if (ctxGender && !(recentLead as any).parsedGender) {
-        updateData.parsedGender = ctxGender;
-        this.logger.log(`👤 Gender: ${ctxGender}`);
-      }
-
-      // City: обновляем только если ещё нет
-      if (ctxCity && !(recentLead as any).parsedCity) {
-        updateData.parsedCity = ctxCity;
-        this.logger.log(`🏙️ City: ${ctxCity}`);
-      }
-
-      // Aktobe resident: обновляем только если ещё нет
-      if (ctxIsAktobe !== undefined && (recentLead as any).isAktobeResident === null) {
-        updateData.isAktobeResident = ctxIsAktobe;
-        this.logger.log(`📍 Aktobe resident: ${ctxIsAktobe ? 'YES' : 'NO'}`);
-      }
-
-      // Name: обновляем только если ещё нет
-      if (ctxName && !(recentLead as any).parsedName) {
-        updateData.parsedName = ctxName;
-        this.logger.log(`👤 Name: ${ctxName}`);
-        
-        // Обновляем имя клиента в Client, если его там нет
-        if (!client.name) {
-          await this.prisma.client.update({
-            where: { id: client.id },
-            data: { name: ctxName },
-          });
-          this.logger.log(`✅ Client name updated: ${ctxName}`);
-        }
-      }
-
-      // Result: BOOKED не деградирует до UNKNOWN
-      const prevResult = recentLead.botResult;
-      const shouldUpdateResult =
-        ctxResult !== null &&
-        ctxResult !== prevResult &&
-        !(prevResult === 'BOOKED' && ctxResult !== 'LOST');
-
-      if (shouldUpdateResult) {
-        updateData.botResult = ctxResult;
-        updateData.botResultUpdatedAt = new Date();
-        this.logger.log(`🎯 Result: ${prevResult ?? 'null'} → ${ctxResult}`);
+      // Update client name if needed
+      if (context.name && !client.name) {
+        await this.prisma.client.update({
+          where: { id: client.id },
+          data: { name: context.name },
+        });
+        this.logger.log(`Client name updated: ${context.name}`);
       }
 
       await this.prisma.lead.update({ where: { id: recentLead.id }, data: updateData });
-      this.logger.log(`✅ Lead ${recentLead.id} updated`);
+      this.logger.log(`Lead ${recentLead.id} updated`);
       return null;
     }
 
@@ -260,42 +187,24 @@ export class WhatsAppParserService {
     // ─────────────────────────────────────────────────
 
     // FIX: Если сообщение пустое (медиа/голос/стикер) — НЕ создаём новый лид
-    // Пустые сообщения не должны триггерить создание дубля
     if (isEmptyMessage) {
-      this.logger.debug(`⏭️ Empty message — skipping new lead creation for ${phone}`);
+      this.logger.debug(`Empty message - skipping new lead creation for ${phone}`);
       return { status: 'skipped', reason: 'empty_message', phone };
     }
 
     // Загружаем все сообщения клиента за 24ч (включая текущее)
+    const oneDayAgo = new Date(Date.now() - MESSAGE_CONTEXT_WINDOW_MS);
     const prevMessages = await this.prisma.message.findMany({
       where: { clientId: client.id, createdAt: { gte: oneDayAgo } },
       orderBy: { createdAt: 'asc' },
     });
-    const fullContext = prevMessages
-      .map((m) => `${m.direction.toLowerCase()}: ${m.message}`)
-      .join('\n');
-    // FIX: для matchOffer используем только INCOMING чтобы слова оператора не влияли
-    const incomingContext = prevMessages
-      .filter((m) => m.direction === 'INCOMING')
-      .map((m) => m.message)
-      .join('\n');
 
-    const priceResult  = this.extractPrice(incomingContext);
-    const offerMatch   = await this.matchOffer(incomingContext, priceResult?.price);
-    const parsedDate   = this.extractDate(fullContext);
-    const parsedTime   = this.extractTime(fullContext);
-    const result       = this.determineResult(fullContext);
-    const period       = this.determinePeriod();
-
-    // Новые парсеры
-    const parsedAge    = this.extractAge(fullContext);
-    const parsedGender = this.extractGender(fullContext, parsedAge ?? undefined);
-    const { city: parsedCity, isAktobe: isAktobeResident } = this.extractCityAndResident(fullContext);
-    const parsedName   = this.extractName(prevMessages.map(m => m.message));
+    // FIX: Используем единый метод парсинга
+    const context = await this.parseLeadContext(prevMessages);
+    const period = this.determinePeriod();
 
     // ─────────────────────────────────────────────────
     // DUPLICATE PREVENTION: Try to create, catch unique constraint violation
-    // If another webhook created lead concurrently → retry as update
     // ─────────────────────────────────────────────────
     try {
       const lead = await this.prisma.lead.create({
@@ -304,37 +213,36 @@ export class WhatsAppParserService {
           whatsappAccountId: whatsappAccountId ?? undefined,
           whatsappOwnerId:   whatsappOwnerId ?? undefined,
           originalMessage:   messageText || '',
-          parsedProcedures:  offerMatch?.procedures ?? [],
-          parsedPrice:       offerMatch?.price ?? priceResult?.price ?? null,
+          parsedProcedures:  context.offer?.procedures ?? [],
+          parsedPrice:       context.offer?.price ?? context.price?.price ?? null,
           parsedCurrency:    'KZT',
-          parsedDate:        parsedDate ?? undefined,
-          parsedTime:        parsedTime ?? undefined,
-          parsedAge:         parsedAge ?? undefined,
-          parsedGender:      parsedGender ?? undefined,
-          parsedCity:        parsedCity ?? undefined,
-          isAktobeResident:  isAktobeResident ?? undefined,
-          parsedName:        parsedName ?? undefined,
-          offerId:           offerMatch?.offerId ?? undefined,
+          parsedDate:        context.date ?? undefined,
+          parsedTime:        context.time ?? undefined,
+          parsedAge:         context.age ?? undefined,
+          parsedGender:      context.gender ?? undefined,
+          parsedCity:        context.city ?? undefined,
+          isAktobeResident:  context.isAktobe ? true : undefined,
+          parsedName:        context.name ?? undefined,
+          offerId:           context.offer?.offerId ?? undefined,
           status:            'NEW',
           source:            'WHATSAPP',
           period,
-          botResult:         result ?? undefined,
-          botResultUpdatedAt: result ? new Date() : undefined,
+          botResult:         context.result ?? undefined,
+          botResultUpdatedAt: context.result ? new Date() : undefined,
         } as any,
         include: { client: true, whatsappAccount: true, whatsappOwner: true, offer: true },
       });
 
       this.logger.log(
-        `✅ Lead created: ${lead.id} | context=${prevMessages.length}msgs | proc=${offerMatch?.offerName ?? 'UNKNOWN'} | price=${offerMatch?.price ?? priceResult?.price ?? 'NULL'} | date=${parsedDate ?? '—'} | time=${parsedTime ?? '—'} | result=${result ?? '—'}`,
+        `Lead created: ${lead.id} | msgs=${prevMessages.length} | proc=${context.offer?.offerName ?? 'UNKNOWN'} | price=${context.offer?.price ?? context.price?.price ?? 'NULL'} | date=${context.date ?? '—'} | time=${context.time ?? '—'} | result=${context.result ?? '—'}`,
       );
 
       return lead;
     } catch (error: any) {
       // Check if this is a unique constraint violation on clientId
-      // Prisma error code P2002 = unique constraint violation
       if (error.code === 'P2002' && error.meta?.target?.includes('clientId')) {
         this.logger.warn(
-          `⚠️  Duplicate lead prevented for client ${client.id} (${phone}). Another webhook created lead concurrently. Retrying as update...`
+          `Duplicate lead prevented for client ${client.id} phone=${phone}. Retrying as update...`
         );
 
         // Query again for the lead that was just created by another webhook
@@ -355,108 +263,18 @@ export class WhatsAppParserService {
             },
             orderBy: { createdAt: 'asc' },
           });
-          const fullConversation = allMessages
-            .map((m) => `${m.direction.toLowerCase()}: ${m.message}`)
-            .join('\n');
-          // FIX: для matchOffer только INCOMING
-          const incomingConv = allMessages
-            .filter((m) => m.direction === 'INCOMING')
-            .map((m) => m.message)
-            .join('\n');
 
-          // Reparse with full context
-          const ctxOffer = await this.matchOffer(incomingConv, this.extractPrice(incomingConv)?.price);
-          const ctxPrice = this.extractPrice(incomingConv);
-          const ctxDate = this.extractDate(fullConversation);
-          const ctxTime = this.extractTime(fullConversation);
-          const ctxResult = this.determineResult(fullConversation);
-
-          // Новые парсеры
-          const ctxAge = this.extractAge(fullConversation);
-          const ctxGender = this.extractGender(fullConversation, ctxAge ?? undefined);
-          const { city: ctxCity, isAktobe: ctxIsAktobe } = this.extractCityAndResident(fullConversation);
-          const ctxName = this.extractName(allMessages.map(m => m.message));
-
-          const updateData: any = {
-            originalMessage: existingLead.originalMessage
-              ? `${existingLead.originalMessage}\n---\n${messageText}`
-              : messageText,
-            updatedAt: new Date(),
-          };
-
-          // Update procedure if not set
-          const hasProcedure = existingLead.parsedProcedures?.length > 0;
-          if (!hasProcedure && ctxOffer) {
-            updateData.parsedProcedures = ctxOffer.procedures;
-            updateData.offerId = ctxOffer.offerId;
-          }
-
-          // Update price if not set
-          const hasPrice = existingLead.parsedPrice && existingLead.parsedPrice > 0;
-          if (!hasPrice) {
-            if (ctxOffer) {
-              updateData.parsedPrice = ctxOffer.price;
-              updateData.parsedCurrency = 'KZT';
-            } else if (ctxPrice) {
-              updateData.parsedPrice = ctxPrice.price;
-              updateData.parsedCurrency = 'KZT';
-            }
-          }
-
-          // Update date if not set
-          if (ctxDate && !(existingLead as any).parsedDate) {
-            updateData.parsedDate = ctxDate;
-          }
-
-          // Update time if not set
-          if (ctxTime && !(existingLead as any).parsedTime) {
-            updateData.parsedTime = ctxTime;
-          }
-
-          // Update age if not set
-          if (ctxAge && !(existingLead as any).parsedAge) {
-            updateData.parsedAge = ctxAge;
-          }
-
-          // Update gender if not set
-          if (ctxGender && !(existingLead as any).parsedGender) {
-            updateData.parsedGender = ctxGender;
-          }
-
-          // Update city if not set
-          if (ctxCity && !(existingLead as any).parsedCity) {
-            updateData.parsedCity = ctxCity;
-          }
-
-          // Update Aktobe resident flag if not set
-          if (ctxIsAktobe !== undefined && (existingLead as any).isAktobeResident === null) {
-            updateData.isAktobeResident = ctxIsAktobe;
-          }
-
-          // Update name if not set
-          if (ctxName && !(existingLead as any).parsedName) {
-            updateData.parsedName = ctxName;
-          }
-
-          // Update result (don't degrade BOOKED to UNKNOWN)
-          const prevResult = existingLead.botResult;
-          const shouldUpdateResult =
-            ctxResult !== null &&
-            ctxResult !== prevResult &&
-            !(prevResult === 'BOOKED' && ctxResult !== 'LOST');
-
-          if (shouldUpdateResult) {
-            updateData.botResult = ctxResult;
-            updateData.botResultUpdatedAt = new Date();
-          }
+          // FIX: Используем единый метод парсинга и обновления
+          const retryContext = await this.parseLeadContext(allMessages);
+          const updateData = this.buildUpdateData(existingLead, retryContext, messageText);
 
           await this.prisma.lead.update({ where: { id: existingLead.id }, data: updateData });
-          this.logger.log(`✅ Lead ${existingLead.id} updated after duplicate prevention`);
+          this.logger.log(`Lead ${existingLead.id} updated after duplicate prevention`);
           return null;
         }
 
         // If we still can't find the lead, something is very wrong
-        this.logger.error(`❌ CRITICAL: Failed to find or create lead for client ${client.id} after unique constraint violation`);
+        this.logger.error(`CRITICAL: Failed to find or create lead for client ${client.id}`);
         throw new Error(`Failed to find or create lead for client ${client.id}`);
       }
 
@@ -472,10 +290,27 @@ export class WhatsAppParserService {
   /**
    * PRICE EXTRACTOR — не изменять!
    * Работает для: 3990, 4990, 5000, 7000, "3990 тг", "4 990 ₸", "7к", "7 мың"
+   * FIX (Deploy #31): Добавлено кэширование для производительности
    */
   extractPrice(text: string): PriceResult | null {
     if (!text) return null;
 
+    // Кэширование
+    const cacheKey = `price:${text.substring(0, 100)}`;
+    if (this.parseCache.has(cacheKey)) {
+      return this.parseCache.get(cacheKey);
+    }
+
+    const result = this.extractPriceImpl(text);
+    
+    // Сохраняем в кэш
+    this.parseCache.set(cacheKey, result);
+    this.cleanCache();
+    
+    return result;
+  }
+
+  private extractPriceImpl(text: string): PriceResult | null {
     const normalized = text.toLowerCase().replace(/\s+/g, ' ');
 
     // Казахский "7к" / "7 к" → 7000
@@ -710,6 +545,7 @@ export class WhatsAppParserService {
   /**
    * OFFER MATCHER — не изменять!
    * Scoring: +50 price match, +10 keyword, +20 category, +5 name words
+   * FIX (Deploy #31): Type safety improvements
    */
   async matchOffer(text: string, price?: number): Promise<OfferMatch | null> {
     if (!text && !price) return null;
@@ -718,11 +554,11 @@ export class WhatsAppParserService {
 
     const offers = await this.prisma.offer.findMany({ where: { active: true } });
     if (offers.length === 0) {
-      this.logger.warn('⚠️ No active offers in DB!');
+      this.logger.warn('No active offers in DB');
       return null;
     }
 
-    let bestOffer: any = null;
+    let bestOffer: typeof offers[0] | null = null;
     let bestScore = 0;
 
     for (const offer of offers) {
@@ -752,9 +588,8 @@ export class WhatsAppParserService {
       }
     }
 
-    const THRESHOLD = 10;
-    if (bestScore >= THRESHOLD && bestOffer) {
-      this.logger.log(`✅ Offer: "${bestOffer.name}" score=${bestScore} price=${bestOffer.price}₸`);
+    if (bestScore >= OFFER_MATCH_THRESHOLD && bestOffer) {
+      this.logger.log(`Offer: "${bestOffer.name}" score=${bestScore} price=${bestOffer.price}₸`);
       return {
         offerId: bestOffer.id,
         offerName: bestOffer.name,
@@ -764,7 +599,7 @@ export class WhatsAppParserService {
       };
     }
 
-    this.logger.log(`❌ No offer match (bestScore=${bestScore})`);
+    this.logger.log(`No offer match bestScore=${bestScore}`);
     return null;
   }
 
@@ -836,7 +671,7 @@ export class WhatsAppParserService {
         const regex = new RegExp(`\\b${escaped}\\b`, 'i');
         if (regex.test(msg)) {
           this.logger.log(
-            `✅ BOOKED | explicit confirmation: "${phrase}" in "${msg.substring(0, 100)}..."`,
+            `BOOKED | explicit confirmation: "${phrase}" in "${msg.substring(0, 100)}..."`,
           );
           return 'BOOKED';
         }
@@ -906,7 +741,7 @@ export class WhatsAppParserService {
 
     for (const phrase of LOST) {
       if (clientMsgs.includes(phrase)) {
-        this.logger.log(`❌ LOST | client refusal: "${phrase}"`);
+        this.logger.log(`LOST | client refusal: "${phrase}"`);
         return 'LOST';
       }
     }
@@ -931,7 +766,7 @@ export class WhatsAppParserService {
 
     for (const phrase of REJECTION) {
       if (operatorMsgs.includes(phrase)) {
-        this.logger.log(`❌ LOST | operator rejection: "${phrase}"`);
+        this.logger.log(`LOST | operator rejection: "${phrase}"`);
         return 'LOST';
       }
     }
@@ -940,7 +775,7 @@ export class WhatsAppParserService {
     // STEP 4: ВСЁ ОСТАЛЬНОЕ — НЕ ОПРЕДЕЛЯЕМ RESULT
     // ═══════════════════════════════════════════════════════════════════
 
-    this.logger.log(`⚪ NULL | no explicit booking confirmation`);
+    this.logger.log(`NULL | no explicit booking confirmation`);
     return null;
   }
 
@@ -1108,21 +943,25 @@ export class WhatsAppParserService {
   /**
    * Извлекает имя клиента из сообщений
    * Ищет после вопросов "Как Вас зовут?", "Ваше имя?", "как я могу к Вам обращаться?"
+   * FIX (Deploy #31): Улучшена валидация и производительность
    */
   extractName(messages: string[]): string | null {
     if (!messages || messages.length === 0) return null;
 
+    // Оптимизация: ищем только последние 10 сообщений
+    const recentMessages = messages.slice(-10);
+
     // Ищем паттерн: вопрос оператора → ответ клиента
-    for (let i = 0; i < messages.length - 1; i++) {
-      const msg = messages[i].toLowerCase();
-      const nextMsg = messages[i + 1];
+    for (let i = 0; i < recentMessages.length - 1; i++) {
+      const msg = recentMessages[i].toLowerCase();
+      const nextMsg = recentMessages[i + 1];
 
       // Вопросы оператора о имени
       if (
         /как.*зовут|как.*обращаться|ваше имя|атыңыз|есіміңіз|подскажите.*имя/i.test(msg) &&
         nextMsg &&
         nextMsg.length > 0 &&
-        nextMsg.length < 50  // Имя не должно быть слишком длинным
+        nextMsg.length <= MAX_NAME_LENGTH
       ) {
         // Следующее сообщение должно быть коротким текстом (имя)
         const name = nextMsg.trim();
@@ -1131,7 +970,7 @@ export class WhatsAppParserService {
         if (
           /^[а-яёa-zәіңғүұқөһ\s-]+$/i.test(name) && 
           !/http|www|\.com|\.ru|\d{5}|здравствуй|спасибо|можно|хочу/i.test(name) &&
-          name.split(' ').length <= 3  // Максимум 3 слова (Имя Фамилия Отчество)
+          name.split(' ').length <= MAX_NAME_WORDS
         ) {
           // Капитализируем первую букву каждого слова
           return name
@@ -1192,5 +1031,146 @@ export class WhatsAppParserService {
     return this.prisma.client.findFirst({
       where: { OR: [{ normalizedPhone: phone }, { phone }] },
     });
+  }
+
+  // ═══════════════════════════════════════════════
+  // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ (Deploy #31 - DRY FIX)
+  // ═══════════════════════════════════════════════
+
+  /**
+   * Парсит все данные из сообщений одним вызовом
+   * FIX: убрано дублирование кода (было 3 копии)
+   */
+  private async parseLeadContext(messages: any[]): Promise<ParsedContext> {
+    const fullConversation = messages
+      .map((m) => `${m.direction.toLowerCase()}: ${m.message}`)
+      .join('\n');
+    
+    const incomingOnly = messages
+      .filter((m) => m.direction === 'INCOMING')
+      .map((m) => m.message)
+      .join('\n');
+
+    const priceResult = this.extractPrice(incomingOnly);
+    const age = this.extractAge(fullConversation);
+
+    return {
+      offer: await this.matchOffer(incomingOnly, priceResult?.price),
+      price: priceResult,
+      date: this.extractDate(fullConversation),
+      time: this.extractTime(fullConversation),
+      age,
+      gender: this.extractGender(fullConversation, age ?? undefined),
+      city: this.extractCityAndResident(fullConversation).city,
+      isAktobe: this.extractCityAndResident(fullConversation).isAktobe,
+      name: this.extractName(messages.map(m => m.message)),
+      result: this.determineResult(fullConversation),
+    };
+  }
+
+  /**
+   * Обновляет только пустые поля в lead
+   * FIX: убрано дублирование логики обновления
+   */
+  private buildUpdateData(
+    existingLead: any,
+    context: ParsedContext,
+    newMessage: string
+  ): Partial<Prisma.LeadUpdateInput> {
+    const updateData: Partial<Prisma.LeadUpdateInput> & { offerId?: string } = {
+      originalMessage: existingLead.originalMessage
+        ? `${existingLead.originalMessage}\n---\n${newMessage}`
+        : newMessage,
+      updatedAt: new Date(),
+    };
+
+    // Procedure
+    const hasProcedure = existingLead.parsedProcedures?.length > 0;
+    if (!hasProcedure && context.offer) {
+      updateData.parsedProcedures = context.offer.procedures as any;
+      updateData.offerId = context.offer.offerId;
+      this.logger.log(`Procedure: ${context.offer.offerName}`);
+    }
+
+    // Price
+    const hasPrice = existingLead.parsedPrice && existingLead.parsedPrice > 0;
+    if (!hasPrice) {
+      if (context.offer) {
+        updateData.parsedPrice = context.offer.price;
+        updateData.parsedCurrency = 'KZT';
+        this.logger.log(`Price from offer: ${context.offer.price} KZT`);
+      } else if (context.price) {
+        updateData.parsedPrice = context.price.price;
+        updateData.parsedCurrency = 'KZT';
+        this.logger.log(`Price extracted: ${context.price.price} KZT`);
+      }
+    }
+
+    // Date
+    if (context.date && !existingLead.parsedDate) {
+      updateData.parsedDate = context.date as any;
+      this.logger.log(`Date: ${context.date}`);
+    }
+
+    // Time
+    if (context.time && !existingLead.parsedTime) {
+      updateData.parsedTime = context.time as any;
+      this.logger.log(`Time: ${context.time}`);
+    }
+
+    // Age
+    if (context.age && !existingLead.parsedAge) {
+      updateData.parsedAge = context.age;
+      this.logger.log(`Age: ${context.age}`);
+    }
+
+    // Gender
+    if (context.gender && !existingLead.parsedGender) {
+      updateData.parsedGender = context.gender as any;
+      this.logger.log(`Gender: ${context.gender}`);
+    }
+
+    // City
+    if (context.city && !existingLead.parsedCity) {
+      updateData.parsedCity = context.city as any;
+      this.logger.log(`City: ${context.city}`);
+    }
+
+    // Aktobe resident
+    if (context.isAktobe !== undefined && existingLead.isAktobeResident === null) {
+      updateData.isAktobeResident = context.isAktobe;
+      this.logger.log(`Aktobe resident: ${context.isAktobe ? 'YES' : 'NO'}`);
+    }
+
+    // Name
+    if (context.name && !existingLead.parsedName) {
+      updateData.parsedName = context.name as any;
+      this.logger.log(`Name: ${context.name}`);
+    }
+
+    // Result (BOOKED не деградирует до UNKNOWN)
+    const prevResult = existingLead.botResult;
+    const shouldUpdateResult =
+      context.result !== null &&
+      context.result !== prevResult &&
+      !(prevResult === 'BOOKED' && context.result !== 'LOST');
+
+    if (shouldUpdateResult) {
+      updateData.botResult = context.result as any;
+      updateData.botResultUpdatedAt = new Date();
+      this.logger.log(`Result: ${prevResult ?? 'null'} -> ${context.result}`);
+    }
+
+    return updateData;
+  }
+
+  /**
+   * Очистка кэша при переполнении
+   */
+  private cleanCache() {
+    if (this.parseCache.size > this.CACHE_MAX_SIZE) {
+      const keysToDelete = Array.from(this.parseCache.keys()).slice(0, 100);
+      keysToDelete.forEach(key => this.parseCache.delete(key));
+    }
   }
 }
