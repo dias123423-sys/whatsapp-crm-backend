@@ -709,7 +709,7 @@ export class WhatsAppParserService {
     // ═══════════════════════════════════════════════════════════════════
 
     const BOOKED_PHRASES = [
-      // RU
+      // RU - используем \b для поиска целых слов
       'записала вас',
       'записал вас',
       'я вас записала',
@@ -723,8 +723,6 @@ export class WhatsAppParserService {
       'я записываю вас',
       'вы записаны на',
       'ваша запись подтверждена',
-      'запись оформлена',
-      'запись успешно оформлена',
       // KZ
       'жазып қойдым',
       'жазып қоямын',
@@ -743,11 +741,18 @@ export class WhatsAppParserService {
         continue;
       }
       const msg = lowerLine.replace(/^outgoing:\s*/i, '').trim();
-      if (BOOKED_PHRASES.some((phrase) => msg.includes(phrase))) {
-        this.logger.log(
-          `✅ BOOKED | explicit confirmation: "${msg.substring(0, 100)}..."`,
-        );
-        return 'BOOKED';
+      
+      // Проверяем каждую фразу как ЦЕЛОЕ слово (с границами слов)
+      for (const phrase of BOOKED_PHRASES) {
+        // Экранируем спецсимволы regex и добавляем границы слов
+        const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+        if (regex.test(msg)) {
+          this.logger.log(
+            `✅ BOOKED | explicit confirmation: "${phrase}" in "${msg.substring(0, 100)}..."`,
+          );
+          return 'BOOKED';
+        }
       }
     }
 
