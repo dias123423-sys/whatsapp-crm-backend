@@ -158,6 +158,10 @@ enum LeadStatus {
   FOLLOW_UP // Требуется повторный звонок
   NO_ANSWER // Не отвечает
   CLOSED // Закрыт (отказ или завершен)
+  OTHER_CITY // Другой город
+  NEGATIVE // Негатив
+  CONTRAINDICATION // Противопоказания
+  NO_PICKUP // Недозвон
 }
 
 enum Period {
